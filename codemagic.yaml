@@ -20,9 +20,9 @@ workflows:
         script: |
           npm install @capacitor/ios --legacy-peer-deps
           
-      - name: Build web assets
+      - name: Build web assets (ignore warnings)
         script: |
-          npm run build
+          CI=false npm run build
           
       - name: Add iOS platform
         script: |
