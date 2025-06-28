@@ -6,6 +6,8 @@ workflows:
       node: 22.14.0
       xcode: 15.0
       cocoapods: default
+      vars:
+        BUNDLE_ID: "com.medicureon.app"
     scripts:
       - name: Install dependencies with legacy peer deps
         script: |
@@ -24,64 +26,100 @@ workflows:
         script: |
           CI=false npm run build
           
-      - name: Update Capacitor config for iOS 13.0
+      - name: Remove existing iOS platform and add fresh
         script: |
-          # Update capacitor.config.json to set minimum iOS version
+          # Remove existing iOS platform if it exists
+          rm -rf ios
+          
+          # Update capacitor.config.json
           node -e "
           const fs = require('fs');
           const config = JSON.parse(fs.readFileSync('capacitor.config.json', 'utf8'));
           if (!config.ios) config.ios = {};
           config.ios.minVersion = '13.0';
           fs.writeFileSync('capacitor.config.json', JSON.stringify(config, null, 2));
-          console.log('Updated capacitor.config.json:', JSON.stringify(config, null, 2));
           "
           
-      - name: Add iOS platform with correct deployment target
-        script: |
-          # Set environment variable for Capacitor
-          export CAPACITOR_IOS_MIN_VERSION=13.0
+          # Add iOS platform fresh
+          npx cap add ios
           
-          # Add iOS platform
-          npx cap add ios || echo "iOS already added"
-          
-          # Ensure the deployment target is set in the project
-          if [ -d "ios/App" ]; then
-            cd ios/App
-            
-            # Update the Xcode project deployment target
-            if [ -f "App.xcodeproj/project.pbxproj" ]; then
-              sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 13.0/g' App.xcodeproj/project.pbxproj
-              echo "Updated project.pbxproj deployment target"
-            fi
-            
-            cd ../..
-          fi
-          
-      - name: Sync Capacitor with iOS 13.0
-        script: |
-          # Set environment variable for pod install
-          export CAPACITOR_IOS_MIN_VERSION=13.0
-          
-          # Run sync which will generate Podfile with correct platform version
-          npx cap sync ios
-          
-          # Double-check and fix Podfile if needed
-          if [ -f "ios/App/Podfile" ]; then
-            cd ios/App
-            # Ensure platform is set to iOS 13.0
-            if ! grep -q "platform :ios, '13.0'" Podfile; then
-              sed -i '' "1s/^/platform :ios, '13.0'\n/" Podfile
-              echo "Added platform iOS 13.0 to Podfile"
-            fi
-            
-            # Run pod install again if we modified the Podfile
-            pod install
-            cd ../..
-          fi
-          
-      - name: Build unsigned IPA
+      - name: Fix iOS deployment target after platform add
         script: |
           cd ios/App
+          
+          # Update project.pbxproj for iOS 13.0
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 13.0/g' App.xcodeproj/project.pbxproj
+          
+          # Ensure Podfile has correct platform
+          if [ -f "Podfile" ]; then
+            if grep -q "platform :ios" Podfile; then
+              sed -i '' "s/platform :ios, '[^']*'/platform :ios, '13.0'/g" Podfile
+            else
+              sed -i '' "1s/^/platform :ios, '13.0'\n/" Podfile
+            fi
+          fi
+          
+          # Clean pod cache and reinstall
+          pod deintegrate
+          pod install --repo-update
+          
+          cd ../..
+          
+      - name: Final Capacitor sync
+        script: |
+          npx cap sync ios
+          
+      - name: Prepare for sideloading
+        script: |
+          cd ios/App
+          
+          # Update bundle identifier
+          /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" App/Info.plist
+          
+          # Disable App Transport Security for development
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" App/Info.plist || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" App/Info.plist || true
+          
+          # Set minimum iOS version in Info.plist
+          /usr/libexec/PlistBuddy -c "Set :MinimumOSVersion 13.0" App/Info.plist || true
+          
+          cd ../..
+          
+      - name: Create export options for sideloading
+        script: |
+          cat > exportOptions.plist << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>compileBitcode</key>
+              <false/>
+              <key>destination</key>
+              <string>export</string>
+              <key>method</key>
+              <string>development</string>
+              <key>provisioningProfiles</key>
+              <dict/>
+              <key>signingCertificate</key>
+              <string>Apple Development</string>
+              <key>signingStyle</key>
+              <string>automatic</string>
+              <key>stripSwiftSymbols</key>
+              <true/>
+              <key>thinning</key>
+              <string>&lt;none&gt;</string>
+          </dict>
+          </plist>
+          EOF
+          
+      - name: Build IPA for sideloading
+        script: |
+          cd ios/App
+          
+          # Clean build folder
+          rm -rf build
+          
+          # Build the archive with minimal signing
           xcodebuild -workspace App.xcworkspace \
             -scheme App \
             -configuration Debug \
@@ -89,15 +127,33 @@ workflows:
             -derivedDataPath build \
             -archivePath build/App.xcarchive \
             archive \
+            DEVELOPMENT_TEAM="" \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
-            
-          # Create IPA for testing
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_ENTITLEMENTS="" \
+            PROVISIONING_PROFILE_SPECIFIER=""
+          
+          # Create a minimal IPA structure
           mkdir -p Payload
           cp -r build/App.xcarchive/Products/Applications/App.app Payload/
+          
+          # Remove code signature if present
+          rm -rf Payload/App.app/_CodeSignature
+          rm -f Payload/App.app/embedded.mobileprovision
+          
+          # Create the IPA
+          zip -r $CM_BUILD_DIR/MediCureOn-sideload.ipa Payload
+          
+          # Also create a properly structured IPA using xcarchive
+          mkdir -p build/export
+          cp -r build/App.xcarchive/Products/Applications/App.app build/export/
+          cd build/export
+          mkdir Payload
+          mv App.app Payload/
           zip -r $CM_BUILD_DIR/MediCureOn.ipa Payload
           
     artifacts:
       - $CM_BUILD_DIR/MediCureOn.ipa
-      - ios/App/build/**/*.app
+      - $CM_BUILD_DIR/MediCureOn-sideload.ipa
+      - ios/App/build/App.xcarchive
