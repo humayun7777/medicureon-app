@@ -4,7 +4,7 @@ workflows:
     max_build_duration: 60
     environment:
       node: 22.14.0
-      xcode: 15.4  # Updated to latest stable version
+      xcode: 15.4
       cocoapods: default
     scripts:
       - name: Install dependencies with legacy peer deps
@@ -27,38 +27,17 @@ workflows:
       - name: Remove and recreate iOS platform
         script: |
           rm -rf ios
-          
-          # Update capacitor config for newer iOS
-          node -e "
-          const fs = require('fs');
-          const config = JSON.parse(fs.readFileSync('capacitor.config.json', 'utf8'));
-          if (!config.ios) config.ios = {};
-          config.ios.minVersion = '14.0';  // Increased minimum version
-          fs.writeFileSync('capacitor.config.json', JSON.stringify(config, null, 2));
-          "
-          
           npx cap add ios
           
-      - name: Configure iOS project for iOS 18 compatibility
+      - name: Update iOS deployment target
         script: |
           cd ios/App
           
-          # Set deployment target to iOS 14.0 (better compatibility)
+          # Update deployment target in project file
           sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 14.0/g' App.xcodeproj/project.pbxproj
           
-          # Update Info.plist for iOS 18 compatibility
-          /usr/libexec/PlistBuddy -c "Set :MinimumOSVersion 14.0" App/Info.plist || true
-          /usr/libexec/PlistBuddy -c "Add :UIRequiresFullScreen bool YES" App/Info.plist || true
-          /usr/libexec/PlistBuddy -c "Add :ITSAppUsesNonExemptEncryption bool NO" App/Info.plist || true
-          
-          # Fix Podfile
-          echo "platform :ios, '14.0'" > Podfile.tmp
-          echo "use_frameworks! :linkage => :static" >> Podfile.tmp
-          cat Podfile >> Podfile.tmp
-          mv Podfile.tmp Podfile
-          
-          # Install pods
-          pod install
+          # Update Podfile platform version
+          sed -i '' "s/platform :ios, '[0-9.]*'/platform :ios, '14.0'/g" Podfile
           
           cd ../..
           
@@ -66,36 +45,16 @@ workflows:
         script: |
           npx cap sync ios
           
-      - name: Build IPA for iOS 18
+      - name: Build IPA
         script: |
           cd ios/App
           
-          # Clean build
-          xcodebuild clean
-          
-          # Build with iOS 18 compatibility
-          xcodebuild build \
-            -workspace App.xcworkspace \
-            -scheme App \
-            -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath build \
-            -destination "generic/platform=iOS" \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            IPHONEOS_DEPLOYMENT_TARGET=14.0 \
-            TARGETED_DEVICE_FAMILY="1,2" \
-            ONLY_ACTIVE_ARCH=NO \
-            VALID_ARCHS="arm64" \
-            ARCHS="arm64"
-          
-          # Archive
-          xcodebuild archive \
-            -workspace App.xcworkspace \
+          # Build archive
+          xcodebuild -workspace App.xcworkspace \
             -scheme App \
             -configuration Release \
             -archivePath build/App.xcarchive \
+            archive \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO
@@ -103,12 +62,6 @@ workflows:
           # Create IPA
           mkdir -p Payload
           cp -r build/App.xcarchive/Products/Applications/App.app Payload/
-          
-          # Remove signatures
-          find Payload -name "_CodeSignature" -type d -exec rm -rf {} + 2>/dev/null || true
-          find Payload -name "*.mobileprovision" -type f -delete 2>/dev/null || true
-          
-          # Create IPA
           zip -r $CM_BUILD_DIR/MediCureOn.ipa Payload
           
     artifacts:
