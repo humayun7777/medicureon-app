@@ -7,13 +7,13 @@ workflows:
       xcode: 15.0
       cocoapods: default
     scripts:
-      - name: Install dependencies
+      - name: Install dependencies with legacy peer deps
         script: |
-          npm install
+          npm install --legacy-peer-deps
           
       - name: Install Capacitor iOS
         script: |
-          npm install @capacitor/ios
+          npm install @capacitor/ios --legacy-peer-deps
           
       - name: Build web assets
         script: |
