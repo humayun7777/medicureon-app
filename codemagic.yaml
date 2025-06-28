@@ -11,6 +11,11 @@ workflows:
         script: |
           npm install --legacy-peer-deps
           
+      - name: Fix ajv dependency issue
+        script: |
+          npm install ajv@^8.0.0 --legacy-peer-deps
+          npm install ajv-keywords@^5.0.0 --legacy-peer-deps
+          
       - name: Install Capacitor iOS
         script: |
           npm install @capacitor/ios --legacy-peer-deps
