@@ -1,0 +1,56 @@
+workflows:
+  ios-workflow:
+    name: iOS Test Build
+    max_build_duration: 60
+    environment:
+      node: 22.14.0
+      xcode: 15.0
+      cocoapods: default
+    scripts:
+      - name: Install dependencies
+        script: |
+          npm install
+          
+      - name: Install Capacitor iOS
+        script: |
+          npm install @capacitor/ios
+          
+      - name: Build web assets
+        script: |
+          npm run build
+          
+      - name: Add iOS platform
+        script: |
+          npx cap add ios || echo "iOS already added"
+          
+      - name: Sync Capacitor
+        script: |
+          npx cap sync ios
+          
+      - name: Install CocoaPods
+        script: |
+          cd ios/App
+          pod install
+          
+      - name: Build unsigned IPA
+        script: |
+          cd ios/App
+          xcodebuild -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Debug \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            -archivePath build/App.xcarchive \
+            archive \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+            
+          # Create IPA for testing
+          mkdir -p Payload
+          cp -r build/App.xcarchive/Products/Applications/App.app Payload/
+          zip -r $CM_BUILD_DIR/MediCureOn.ipa Payload
+            
+    artifacts:
+      - $CM_BUILD_DIR/MediCureOn.ipa
+      - ios/App/build/**/*.app
