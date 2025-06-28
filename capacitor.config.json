@@ -1,0 +1,21 @@
+{
+  "appId": "com.medicureon.app",
+  "appName": "MediCureOn",
+  "webDir": "build",
+  "server": {
+    "androidScheme": "https",
+    "iosScheme": "https",
+    "hostname": "medicureon.app"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "backgroundColor": "#02276F",
+      "showSpinner": false,
+      "androidSpinnerStyle": "large",
+      "iosSpinnerStyle": "small",
+      "splashFullScreen": true,
+      "splashImmersive": true
+    }
+  }
+}
