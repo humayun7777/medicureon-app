@@ -28,26 +28,41 @@ workflows:
         script: |
           npx cap add ios || echo "iOS already added"
           
-      - name: Fix iOS deployment target
+      - name: Set iOS deployment target before sync
         script: |
-          # Update the iOS deployment target to 13.0
-          cd ios/App
-          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [^;]*/IPHONEOS_DEPLOYMENT_TARGET = 13.0/g' App.xcodeproj/project.pbxproj
+          # Create a capacitor.config.json with iOS preferences if needed
+          node -e "
+          const fs = require('fs');
+          const config = JSON.parse(fs.readFileSync('capacitor.config.json', 'utf8'));
+          if (!config.ios) config.ios = {};
+          if (!config.ios.minVersion) config.ios.minVersion = '13.0';
+          fs.writeFileSync('capacitor.config.json', JSON.stringify(config, null, 2));
+          "
           
-          # Update Podfile if it exists
-          if [ -f "Podfile" ]; then
-            sed -i '' "s/platform :ios, '[^']*'/platform :ios, '13.0'/g" Podfile
+          # If ios/App exists, update the deployment target
+          if [ -d "ios/App" ]; then
+            cd ios/App
+            
+            # Update project.pbxproj
+            if [ -f "App.xcodeproj/project.pbxproj" ]; then
+              sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [^;]*/IPHONEOS_DEPLOYMENT_TARGET = 13.0/g' App.xcodeproj/project.pbxproj
+            fi
+            
+            # Update or create Podfile with correct platform
+            if [ -f "Podfile" ]; then
+              sed -i '' "s/platform :ios, '[^']*'/platform :ios, '13.0'/g" Podfile
+            else
+              echo "platform :ios, '13.0'" > Podfile
+              echo "" >> Podfile
+              cat Podfile.default >> Podfile 2>/dev/null || true
+            fi
+            
+            cd ../..
           fi
-          cd ../..
           
       - name: Sync Capacitor
         script: |
           npx cap sync ios
-          
-      - name: Install CocoaPods
-        script: |
-          cd ios/App
-          pod install
           
       - name: Build unsigned IPA
         script: |
@@ -67,7 +82,7 @@ workflows:
           mkdir -p Payload
           cp -r build/App.xcarchive/Products/Applications/App.app Payload/
           zip -r $CM_BUILD_DIR/MediCureOn.ipa Payload
-            
+          
     artifacts:
       - $CM_BUILD_DIR/MediCureOn.ipa
       - ios/App/build/**/*.app
