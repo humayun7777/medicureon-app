@@ -28,6 +28,18 @@ workflows:
         script: |
           npx cap add ios || echo "iOS already added"
           
+      - name: Fix iOS deployment target
+        script: |
+          # Update the iOS deployment target to 13.0
+          cd ios/App
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [^;]*/IPHONEOS_DEPLOYMENT_TARGET = 13.0/g' App.xcodeproj/project.pbxproj
+          
+          # Update Podfile if it exists
+          if [ -f "Podfile" ]; then
+            sed -i '' "s/platform :ios, '[^']*'/platform :ios, '13.0'/g" Podfile
+          fi
+          cd ../..
+          
       - name: Sync Capacitor
         script: |
           npx cap sync ios
