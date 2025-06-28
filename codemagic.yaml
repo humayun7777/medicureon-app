@@ -6,8 +6,6 @@ workflows:
       node: 22.14.0
       xcode: 15.0
       cocoapods: default
-      vars:
-        BUNDLE_ID: "com.medicureon.app"
     scripts:
       - name: Install dependencies with legacy peer deps
         script: |
@@ -26,134 +24,94 @@ workflows:
         script: |
           CI=false npm run build
           
-      - name: Remove existing iOS platform and add fresh
+      - name: Remove and recreate iOS platform
         script: |
-          # Remove existing iOS platform if it exists
           rm -rf ios
-          
-          # Update capacitor.config.json
-          node -e "
-          const fs = require('fs');
-          const config = JSON.parse(fs.readFileSync('capacitor.config.json', 'utf8'));
-          if (!config.ios) config.ios = {};
-          config.ios.minVersion = '13.0';
-          fs.writeFileSync('capacitor.config.json', JSON.stringify(config, null, 2));
-          "
-          
-          # Add iOS platform fresh
           npx cap add ios
           
-      - name: Fix iOS deployment target after platform add
+      - name: Configure iOS project
         script: |
           cd ios/App
           
-          # Update project.pbxproj for iOS 13.0
+          # Set deployment target
           sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 13.0/g' App.xcodeproj/project.pbxproj
           
-          # Ensure Podfile has correct platform
-          if [ -f "Podfile" ]; then
-            if grep -q "platform :ios" Podfile; then
-              sed -i '' "s/platform :ios, '[^']*'/platform :ios, '13.0'/g" Podfile
-            else
-              sed -i '' "1s/^/platform :ios, '13.0'\n/" Podfile
-            fi
-          fi
+          # Fix Podfile
+          echo "platform :ios, '13.0'" > Podfile.tmp
+          cat Podfile >> Podfile.tmp
+          mv Podfile.tmp Podfile
           
-          # Clean pod cache and reinstall
-          pod deintegrate
-          pod install --repo-update
+          # Install pods
+          pod install
           
           cd ../..
           
-      - name: Final Capacitor sync
+      - name: Sync Capacitor
         script: |
           npx cap sync ios
           
-      - name: Prepare for sideloading
+      - name: Install ldid for fakesigning
+        script: |
+          brew install ldid
+          
+      - name: Build and fakesign IPA
         script: |
           cd ios/App
           
-          # Update bundle identifier
-          /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" App/Info.plist
+          # Build the app
+          xcodebuild clean build \
+            -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
           
-          # Disable App Transport Security for development
-          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" App/Info.plist || true
-          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" App/Info.plist || true
+          # Find the built app
+          APP_PATH=$(find build -name "*.app" -type d | head -n 1)
           
-          # Set minimum iOS version in Info.plist
-          /usr/libexec/PlistBuddy -c "Set :MinimumOSVersion 13.0" App/Info.plist || true
+          # Create Payload directory
+          mkdir -p Payload
+          cp -r "$APP_PATH" Payload/App.app
           
-          cd ../..
+          # Remove any existing signatures
+          rm -rf Payload/App.app/_CodeSignature
+          rm -f Payload/App.app/embedded.mobileprovision
           
-      - name: Create export options for sideloading
-        script: |
-          cat > exportOptions.plist << EOF
+          # Create a minimal entitlements file
+          cat > entitlements.plist << EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-              <key>compileBitcode</key>
-              <false/>
-              <key>destination</key>
-              <string>export</string>
-              <key>method</key>
-              <string>development</string>
-              <key>provisioningProfiles</key>
-              <dict/>
-              <key>signingCertificate</key>
-              <string>Apple Development</string>
-              <key>signingStyle</key>
-              <string>automatic</string>
-              <key>stripSwiftSymbols</key>
+              <key>application-identifier</key>
+              <string>FAKETEAMID.com.medicureon.app</string>
+              <key>get-task-allow</key>
               <true/>
-              <key>thinning</key>
-              <string>&lt;none&gt;</string>
           </dict>
           </plist>
           EOF
           
-      - name: Build IPA for sideloading
-        script: |
-          cd ios/App
+          # Fakesign the app binary
+          ldid -Sentitlements.plist Payload/App.app/App
           
-          # Clean build folder
-          rm -rf build
+          # Fakesign all frameworks
+          find Payload/App.app/Frameworks -name "*.framework" -type d | while read framework; do
+            framework_name=$(basename "$framework" .framework)
+            if [ -f "$framework/$framework_name" ]; then
+              ldid -S "$framework/$framework_name"
+            fi
+          done
           
-          # Build the archive with minimal signing
-          xcodebuild -workspace App.xcworkspace \
-            -scheme App \
-            -configuration Debug \
-            -sdk iphoneos \
-            -derivedDataPath build \
-            -archivePath build/App.xcarchive \
-            archive \
-            DEVELOPMENT_TEAM="" \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_ENTITLEMENTS="" \
-            PROVISIONING_PROFILE_SPECIFIER=""
-          
-          # Create a minimal IPA structure
-          mkdir -p Payload
-          cp -r build/App.xcarchive/Products/Applications/App.app Payload/
-          
-          # Remove code signature if present
-          rm -rf Payload/App.app/_CodeSignature
-          rm -f Payload/App.app/embedded.mobileprovision
+          # Fakesign all dylibs
+          find Payload/App.app -name "*.dylib" -type f | while read dylib; do
+            ldid -S "$dylib"
+          done
           
           # Create the IPA
-          zip -r $CM_BUILD_DIR/MediCureOn-sideload.ipa Payload
-          
-          # Also create a properly structured IPA using xcarchive
-          mkdir -p build/export
-          cp -r build/App.xcarchive/Products/Applications/App.app build/export/
-          cd build/export
-          mkdir Payload
-          mv App.app Payload/
-          zip -r $CM_BUILD_DIR/MediCureOn.ipa Payload
+          zip -r $CM_BUILD_DIR/MediCureOn-fakesigned.ipa Payload
           
     artifacts:
-      - $CM_BUILD_DIR/MediCureOn.ipa
-      - $CM_BUILD_DIR/MediCureOn-sideload.ipa
-      - ios/App/build/App.xcarchive
+      - $CM_BUILD_DIR/MediCureOn-fakesigned.ipa
