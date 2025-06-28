@@ -24,45 +24,60 @@ workflows:
         script: |
           CI=false npm run build
           
-      - name: Add iOS platform
+      - name: Update Capacitor config for iOS 13.0
         script: |
-          npx cap add ios || echo "iOS already added"
-          
-      - name: Set iOS deployment target before sync
-        script: |
-          # Create a capacitor.config.json with iOS preferences if needed
+          # Update capacitor.config.json to set minimum iOS version
           node -e "
           const fs = require('fs');
           const config = JSON.parse(fs.readFileSync('capacitor.config.json', 'utf8'));
           if (!config.ios) config.ios = {};
-          if (!config.ios.minVersion) config.ios.minVersion = '13.0';
+          config.ios.minVersion = '13.0';
           fs.writeFileSync('capacitor.config.json', JSON.stringify(config, null, 2));
+          console.log('Updated capacitor.config.json:', JSON.stringify(config, null, 2));
           "
           
-          # If ios/App exists, update the deployment target
+      - name: Add iOS platform with correct deployment target
+        script: |
+          # Set environment variable for Capacitor
+          export CAPACITOR_IOS_MIN_VERSION=13.0
+          
+          # Add iOS platform
+          npx cap add ios || echo "iOS already added"
+          
+          # Ensure the deployment target is set in the project
           if [ -d "ios/App" ]; then
             cd ios/App
             
-            # Update project.pbxproj
+            # Update the Xcode project deployment target
             if [ -f "App.xcodeproj/project.pbxproj" ]; then
-              sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [^;]*/IPHONEOS_DEPLOYMENT_TARGET = 13.0/g' App.xcodeproj/project.pbxproj
-            fi
-            
-            # Update or create Podfile with correct platform
-            if [ -f "Podfile" ]; then
-              sed -i '' "s/platform :ios, '[^']*'/platform :ios, '13.0'/g" Podfile
-            else
-              echo "platform :ios, '13.0'" > Podfile
-              echo "" >> Podfile
-              cat Podfile.default >> Podfile 2>/dev/null || true
+              sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 13.0/g' App.xcodeproj/project.pbxproj
+              echo "Updated project.pbxproj deployment target"
             fi
             
             cd ../..
           fi
           
-      - name: Sync Capacitor
+      - name: Sync Capacitor with iOS 13.0
         script: |
+          # Set environment variable for pod install
+          export CAPACITOR_IOS_MIN_VERSION=13.0
+          
+          # Run sync which will generate Podfile with correct platform version
           npx cap sync ios
+          
+          # Double-check and fix Podfile if needed
+          if [ -f "ios/App/Podfile" ]; then
+            cd ios/App
+            # Ensure platform is set to iOS 13.0
+            if ! grep -q "platform :ios, '13.0'" Podfile; then
+              sed -i '' "1s/^/platform :ios, '13.0'\n/" Podfile
+              echo "Added platform iOS 13.0 to Podfile"
+            fi
+            
+            # Run pod install again if we modified the Podfile
+            pod install
+            cd ../..
+          fi
           
       - name: Build unsigned IPA
         script: |
