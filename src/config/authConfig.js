@@ -5,6 +5,7 @@
 
 import { LogLevel } from '@azure/msal-browser';
 import { Capacitor } from '@capacitor/core';
+import { App } from '@capacitor/app';
 
 // Function to determine redirect URI based on platform
 const getRedirectUri = () => {
@@ -19,6 +20,18 @@ const getRedirectUri = () => {
   }
 };
 
+// Handle app URL for authentication redirect on mobile
+if (Capacitor.isNativePlatform()) {
+  App.addListener('appUrlOpen', (event) => {
+    console.log('App opened with URL:', event.url);
+    // Handle the authentication callback
+    if (event.url.includes('msauth.com.medicureon.app://auth')) {
+      // The MSAL library should handle this automatically
+      console.log('Authentication callback received');
+    }
+  });
+}
+
 export const msalConfig = {
   auth: {
     clientId: "6e193dab-52c6-4dd6-95dd-abfb09d15d06",
@@ -26,7 +39,7 @@ export const msalConfig = {
     knownAuthorities: ["medicureoniam.ciamlogin.com", "login.medicureon.com", "login.microsoftonline.com"],
     redirectUri: getRedirectUri(),
     postLogoutRedirectUri: getRedirectUri(),
-    navigateToLoginRequestUrl: !Capacitor.isNativePlatform(),
+    navigateToLoginRequestUrl: false, // Changed to false for mobile
     validateAuthority: false,
   },
   cache: {
@@ -62,12 +75,15 @@ export const msalConfig = {
     windowHashTimeout: 60000,
     iframeHashTimeout: 6000,
     loadFrameTimeout: 6000,
+    // Add this for mobile
+    redirectNavigationTimeout: 10000,
   },
 };
 
 // Login request configuration
 export const loginRequest = {
   scopes: ["openid", "profile", "email"],
+  prompt: "select_account", // Add this to avoid token issues
 };
 
 // External ID specific configuration

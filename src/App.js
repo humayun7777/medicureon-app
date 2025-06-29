@@ -25,7 +25,21 @@ import PostSurgeryRecoveryDashboard from './components/plans/dashboards/PostSurg
 import PreventiveIntelligenceDashboard from './components/plans/dashboards/PreventiveIntelligenceDashboard';
 import './App.css';
 import { Capacitor } from '@capacitor/core';
+import { App as CapacitorApp } from '@capacitor/app';
 import deviceManager from './services/deviceManager';
+
+// Handle app URL for authentication redirect on mobile
+if (Capacitor.isNativePlatform()) {
+  CapacitorApp.addListener('appUrlOpen', (event) => {
+    console.log('App opened with URL:', event.url);
+    // The MSAL library should handle this automatically
+    if (event.url.includes('msauth.com.medicureon.app://auth')) {
+      console.log('Authentication callback received');
+      // Force a page reload to process the auth callback
+      window.location.reload();
+    }
+  });
+}
 
 // Main App Component wrapped with AuthProvider and MediCureOnDataProvider
 function App() {
@@ -40,9 +54,31 @@ function App() {
 
 // Separate component to use auth context
 function AppContent() {
-  const { isAuthenticated, isLoading, msalInitialized, error, user, loginRedirect, clearError } = useAuth();
+  const { isAuthenticated, isLoading, msalInitialized, error, user, loginRedirect, clearError, msalInstance } = useAuth();
   const [currentPage, setCurrentPage] = useState('landing');
   const [userInfo, setUserInfo] = useState(null);
+
+  // Handle MSAL redirect for mobile platforms
+  useEffect(() => {
+    if (Capacitor.isNativePlatform() && msalInstance) {
+      console.log('Handling MSAL redirect promise for mobile...');
+      msalInstance.handleRedirectPromise()
+        .then((response) => {
+          if (response) {
+            console.log('Login successful:', response);
+            msalInstance.setActiveAccount(response.account);
+          }
+        })
+        .catch((error) => {
+          console.error('Login error:', error);
+          // Handle specific mobile auth errors
+          if (error.errorCode === 'AADSTS165000' || error.errorCode === 'AADSTS50011') {
+            console.error('Token validation error - clearing cache and retrying');
+            msalInstance.clearCache();
+          }
+        });
+    }
+  }, [msalInstance]);
 
   // Fetch user info when authenticated
   useEffect(() => {
@@ -138,7 +174,12 @@ function AppContent() {
     
     if (msalInitialized && !isLoading && !isAuthenticated && !error && requiresAuth) {
       console.log('User not authenticated, redirecting to Microsoft login...');
-      loginRedirect();
+      // Add small delay for mobile to ensure proper initialization
+      if (Capacitor.isNativePlatform()) {
+        setTimeout(() => loginRedirect(), 500);
+      } else {
+        loginRedirect();
+      }
     }
   }, [msalInitialized, isLoading, isAuthenticated, error, loginRedirect, currentPage]);
 
@@ -159,17 +200,19 @@ function AppContent() {
   // Handle navigation
   const handleNavigate = (page) => {
     setCurrentPage(page);
-    // Update URL for better UX
-    if (page === 'terms' || page === 'privacy' || page === 'auth-error') {
-      window.history.pushState({}, '', `/${page}`);
-    } else if (page === 'subscription-success') {
-      // Preserve session_id in URL for subscription success
-      window.history.pushState({}, '', `/subscription-success${window.location.search}`);
-    } else if (page.startsWith('plan-dashboard/')) {
-      // Handle plan dashboard routes
-      window.history.pushState({}, '', `/${page}`);
-    } else {
-      window.history.pushState({}, '', '/');
+    // Update URL for better UX (not on mobile to avoid navigation issues)
+    if (!Capacitor.isNativePlatform()) {
+      if (page === 'terms' || page === 'privacy' || page === 'auth-error') {
+        window.history.pushState({}, '', `/${page}`);
+      } else if (page === 'subscription-success') {
+        // Preserve session_id in URL for subscription success
+        window.history.pushState({}, '', `/subscription-success${window.location.search}`);
+      } else if (page.startsWith('plan-dashboard/')) {
+        // Handle plan dashboard routes
+        window.history.pushState({}, '', `/${page}`);
+      } else {
+        window.history.pushState({}, '', '/');
+      }
     }
   };
 
@@ -179,7 +222,11 @@ function AppContent() {
       handleNavigate('landing');
     } else {
       // If not authenticated, go to home or trigger login
-      window.location.href = '/';
+      if (Capacitor.isNativePlatform()) {
+        loginRedirect();
+      } else {
+        window.location.href = '/';
+      }
     }
   };
 
@@ -210,7 +257,9 @@ function AppContent() {
         <div className="text-center">
           <div className="w-12 h-12 mx-auto mb-4 border-b-2 border-blue-600 rounded-full animate-spin"></div>
           <h2 className="mb-2 text-xl font-semibold text-gray-900">Loading MediCureOn</h2>
-          <p className="text-gray-600">Please wait while we authenticate you...</p>
+          <p className="text-gray-600">
+            {Capacitor.isNativePlatform() ? 'Initializing app...' : 'Please wait while we authenticate you...'}
+          </p>
         </div>
       </div>
     );
@@ -231,7 +280,12 @@ function AppContent() {
           <button 
             onClick={() => {
               clearError();
-              window.location.reload();
+              if (Capacitor.isNativePlatform()) {
+                // On mobile, try to login again
+                loginRedirect();
+              } else {
+                window.location.reload();
+              }
             }} 
             className="w-full px-4 py-2 text-white transition bg-blue-600 rounded hover:bg-blue-700"
           >
