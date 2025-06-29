@@ -26,6 +26,7 @@ import { useAuth } from '../../hooks/useAuth';
 import profileApiService from '../../services/profileApiService';
 import { apiConfig } from '../../config/apiConfig';
 import appleHealthKitService from '../../services/appleHealthKitService';
+import { Capacitor } from '@capacitor/core';
 
 const ProfileManager = ({ onNavigate }) => {
   const { user, userInfo } = useAuth();
@@ -3191,36 +3192,45 @@ const DevicesTab = ({ formData, handleInputChange, addArrayItem, removeArrayItem
   
   // Handle device connection - USE ONLY THIS ONE
   const handleDeviceConnection = async (deviceKey, isConnected) => {
-    if (deviceKey === 'apple' && !isConnected) {
-      try {
-        // Check if running on mobile (Capacitor)
-        if (window.Capacitor && window.Capacitor.isNativePlatform()) {
-          // Mobile app - direct connection
-          const result = await appleHealthKitService.initialize(formData.userId || 'user123');
-          if (result.success) {
-            handleInputChange('healthDataSources', 'apple', true);
-            alert('Apple Health connected successfully!');
-          } else {
-            alert(result.message);
-          }
+  if (deviceKey === 'apple' && !isConnected) {
+    try {
+      // Import Capacitor at the top of the file
+      const { Capacitor } = await import('@capacitor/core');
+      
+      // Debug logging
+      console.log('Platform:', Capacitor.getPlatform());
+      console.log('Is Native:', Capacitor.isNativePlatform());
+      alert(`Platform: ${Capacitor.getPlatform()}, Is Native: ${Capacitor.isNativePlatform()}`);
+      
+      // Check if running on mobile (Capacitor)
+      if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios') {
+        // Mobile app - direct connection
+        // Use formData.userId instead of user?.uid
+        const userId = formData.userId || formData.email || 'user123';
+        const result = await appleHealthKitService.initialize(userId);
+        if (result.success) {
+          handleInputChange('healthDataSources', 'apple', true);
+          alert('Apple Health connected successfully!');
         } else {
-          // Web browser - show download instructions
-          showAppleHealthModal();
+          alert(result.message);
         }
-      } catch (error) {
-        console.error('Failed to connect Apple Health:', error);
-        alert('Failed to connect Apple Health. Please try again.');
+      } else {
+        // Web browser - show download instructions
+        showAppleHealthModal();
       }
-    } else if (deviceKey === 'apple' && isConnected) {
-      // Disconnect
-      handleInputChange('healthDataSources', deviceKey, false);
-    } else {
-      // Handle other devices normally
-      handleInputChange('healthDataSources', deviceKey, !isConnected);
+    } catch (error) {
+      console.error('Failed to connect Apple Health:', error);
+      alert('Failed to connect Apple Health. Please try again.');
     }
-  };
+  } else if (deviceKey === 'apple' && isConnected) {
+    // Disconnect
+    handleInputChange('healthDataSources', deviceKey, false);
+  } else {
+    // Handle other devices normally
+    handleInputChange('healthDataSources', deviceKey, !isConnected);
+  }
+};
 
-  // Show modal for Apple Health connection on web
   // Show modal for Apple Health connection on web
 const showAppleHealthModal = () => {
   // Create modal container

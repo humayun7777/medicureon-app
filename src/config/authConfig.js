@@ -4,16 +4,20 @@
 // =============================================
 
 import { LogLevel } from '@azure/msal-browser';
+import { Capacitor } from '@capacitor/core';
 
 export const msalConfig = {
   auth: {
     clientId: "6e193dab-52c6-4dd6-95dd-abfb09d15d06",
-    // Temporarily use the direct URL until SSL is ready
     authority: "https://medicureoniam.ciamlogin.com/36c237cc-ca3b-425e-aed5-437c41c4b892/",
     knownAuthorities: ["medicureoniam.ciamlogin.com", "login.medicureon.com", "login.microsoftonline.com"],
-    redirectUri: process.env.REACT_APP_AUTH_REDIRECT_URI || "http://localhost:3000/",
-    postLogoutRedirectUri: process.env.REACT_APP_AUTH_REDIRECT_URI || "http://localhost:3000/",
-    navigateToLoginRequestUrl: true,
+    redirectUri: Capacitor.isNativePlatform() 
+      ? "msauth.com.medicureon.app://auth"  // For native iOS/Android app
+      : (process.env.REACT_APP_AUTH_REDIRECT_URI || window.location.origin || "http://localhost:3000/"),
+    postLogoutRedirectUri: Capacitor.isNativePlatform()
+      ? "msauth.com.medicureon.app://auth"  // For native iOS/Android app
+      : (process.env.REACT_APP_AUTH_REDIRECT_URI || window.location.origin || "http://localhost:3000/"),
+    navigateToLoginRequestUrl: !Capacitor.isNativePlatform(), // Only navigate on web
     validateAuthority: false,
   },
   cache: {

@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-        <string>MediCureOn</string>
+	<string>MediCureOn</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -29,6 +29,7 @@
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>armv7</string>
+		<string>healthkit</string>
 	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
@@ -49,5 +50,24 @@
 	<string>MediCureOn needs access to your health data to provide personalized health insights and track your wellness progress.</string>
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>MediCureOn needs permission to save health data from manual entries and connected devices.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>msauth.com.medicureon.app</string>
+				<string>com.medicureon.app</string>
+				<string>medicureon</string>
+			</array>
+			<key>CFBundleURLName</key>
+			<string>com.medicureon.app</string>
+		</dict>
+	</array>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>msauth</string>
+		<string>msauthv2</string>
+		<string>msauthv3</string>
+	</array>
 </dict>
 </plist>
