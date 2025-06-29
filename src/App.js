@@ -12,7 +12,7 @@ import HealthcarePlans from './components/plans/HealthcarePlans';
 import SubscriptionPlans from './components/subscription/SubscriptionPlans';
 import SubscriptionSuccess from './components/subscription/SubscriptionSuccess';
 import RewardsAchievementsDashboard from './components/rewards/RewardsAchievementsDashboard';
-import CommunityHub from './components/community/CommunityHub'; // Add this import
+import CommunityHub from './components/community/CommunityHub';
 import WeightLossDashboard from './components/plans/dashboards/WeightLossDashboard';
 import DiabetesBloodSugarDashboard from './components/plans/dashboards/DiabetesBloodSugarDashboard';
 import CardiovascularHealthDashboard from './components/plans/dashboards/CardiovascularHealthDashboard';
@@ -24,6 +24,8 @@ import WomenReproductiveHormonalDashboard from './components/plans/dashboards/Wo
 import PostSurgeryRecoveryDashboard from './components/plans/dashboards/PostSurgeryRecoveryDashboard';
 import PreventiveIntelligenceDashboard from './components/plans/dashboards/PreventiveIntelligenceDashboard';
 import './App.css';
+import { Capacitor } from '@capacitor/core';
+import deviceManager from './services/deviceManager';
 
 // Main App Component wrapped with AuthProvider and MediCureOnDataProvider
 function App() {
@@ -53,6 +55,55 @@ function AppContent() {
         profilePictureUrl: null, // Will be loaded from profile data
         subscriptionType: null // Will be loaded from subscription data
       });
+
+      // Initialize device manager when user is authenticated
+      if (user.localAccountId) {
+        deviceManager.initialize(user.localAccountId, userInfo);
+        
+        // Auto-initialize HealthKit on iOS
+        if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios') {
+          setTimeout(async () => {
+            console.log('Checking Apple Health connection status...');
+            const connectionStatus = deviceManager.getDeviceConnectionStatus('apple');
+            
+            if (!connectionStatus.connected) {
+              console.log('Apple Health not connected, attempting auto-connect...');
+              // Try silent connection first
+              try {
+                const result = await deviceManager.connectDevice('apple');
+                if (result.success) {
+                  console.log('Apple Health connected successfully!');
+                  // Dispatch event to update UI
+                  window.dispatchEvent(new CustomEvent('healthDeviceConnected', { 
+                    detail: { device: 'apple', status: 'connected' } 
+                  }));
+                } else if (result.requiresApp) {
+                  console.log('Apple Health requires native app');
+                } else {
+                  console.log('Apple Health connection failed:', result.message);
+                  // Only show prompt if it's a permissions issue
+                  if (result.message && result.message.includes('permission')) {
+                    const shouldConnect = window.confirm(
+                      'Would you like to connect Apple Health to track your health data?'
+                    );
+                    
+                    if (shouldConnect) {
+                      const retryResult = await deviceManager.connectDevice('apple');
+                      if (retryResult.success) {
+                        alert('Apple Health connected successfully!');
+                      }
+                    }
+                  }
+                }
+              } catch (error) {
+                console.error('Error during auto-connect:', error);
+              }
+            } else {
+              console.log('Apple Health already connected');
+            }
+          }, 3000); // Give app time to fully initialize
+        }
+      }
     }
   }, [isAuthenticated, user]);
 
@@ -80,7 +131,7 @@ function AppContent() {
   useEffect(() => {
     // Allow access to legal pages, auth error, and subscription success without authentication check
     const publicPages = ['terms', 'privacy', 'auth-error'];
-    const authRequiredPages = ['landing', 'profile', 'plans', 'subscription', 'subscription-success', 'rewards', 'community']; // Added community
+    const authRequiredPages = ['landing', 'profile', 'plans', 'subscription', 'subscription-success', 'rewards', 'community'];
     
     // Check if current page requires auth (including plan dashboards)
     const requiresAuth = authRequiredPages.includes(currentPage) || currentPage.startsWith('plan-dashboard/');
@@ -99,7 +150,9 @@ function AppContent() {
       msalInitialized,
       hasUser: !!user,
       currentPage,
-      sessionId: new URLSearchParams(window.location.search).get('session_id')
+      sessionId: new URLSearchParams(window.location.search).get('session_id'),
+      platform: Capacitor.getPlatform(),
+      isNative: Capacitor.isNativePlatform()
     });
   }, [isAuthenticated, isLoading, msalInitialized, user, currentPage]);
 
@@ -129,6 +182,13 @@ function AppContent() {
       window.location.href = '/';
     }
   };
+
+  // Expose device manager to window for debugging (remove in production)
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'development') {
+      window.deviceManager = deviceManager;
+    }
+  }, []);
 
   // Show legal pages without authentication check
   if (currentPage === 'terms') {
@@ -198,7 +258,7 @@ function AppContent() {
 
         {currentPage === 'rewards' && <RewardsAchievementsDashboard onNavigate={handleNavigate} />}
         
-        {currentPage === 'community' && <CommunityHub onNavigate={handleNavigate} />} {/* Add this line */}
+        {currentPage === 'community' && <CommunityHub onNavigate={handleNavigate} />}
         
         {/* Plan Dashboards */}
         {currentPage === 'plan-dashboard/1' && (

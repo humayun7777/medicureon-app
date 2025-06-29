@@ -17,10 +17,11 @@ class IomtApiService {
         data: {
           metadata: {
             deviceId: deviceData.deviceId,
-            deviceType: deviceData.deviceType, // 'apple-watch', 'fitbit', etc.
-            timestamp: new Date().toISOString(),
-            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            dataVersion: '1.0'
+            deviceType: deviceData.deviceType, // 'apple-health', 'fitbit', etc.
+            timestamp: deviceData.timestamp || new Date().toISOString(),
+            timezone: deviceData.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+            dataVersion: deviceData.dataVersion || '2.0',
+            syncType: deviceData.syncType || 'automatic'
           },
           metrics: deviceData.metrics, // { heartRate: {...}, steps: {...}, etc. }
           deviceContext: {
@@ -57,55 +58,51 @@ class IomtApiService {
 
   // Get IoMT data for a user
   async getIomtData(userId, options = {}) {
-    try {
-      const {
-        country = 'United States',
-        deviceType = null,
-        deviceId = null,
-        startDate = null,
-        endDate = null,
-        metricType = null,
-        limit = 100,
-        aggregation = null
-      } = options;
-      
-      // Build query parameters
-      const params = new URLSearchParams({
-        country: country,
-        code: apiConfig.functionKeys.iomtDataGet
-      });
-      
-      if (deviceType) params.append('deviceType', deviceType);
-      if (deviceId) params.append('deviceId', deviceId);
-      if (startDate) params.append('startDate', startDate);
-      if (endDate) params.append('endDate', endDate);
-      if (metricType) params.append('metricType', metricType);
-      if (limit) params.append('limit', limit.toString());
-      if (aggregation) params.append('aggregation', aggregation);
-      
-      const url = `${apiConfig.backendUrl}${apiConfig.endpoints.iomt.get(userId)}?${params.toString()}`;
-      
-      console.log('Fetching IoMT data from:', url);
-      
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Failed to fetch IoMT data: ${response.status} - ${errorText}`);
-      }
-
-      const data = await response.json();
-      console.log('IoMT data fetched successfully:', data);
-      return data;
-    } catch (error) {
-      console.error('Error fetching IoMT data:', error);
-      throw error;
+  try {
+    const { country = 'United States', startDate, endDate, limit = 50, aggregation = 'latest' } = options;
+    
+    let url = `${this.baseUrl}/iomt/${userId}?country=${encodeURIComponent(country)}&code=${this.functionKey}`;
+    
+    if (startDate) url += `&startDate=${startDate}`;
+    if (endDate) url += `&endDate=${endDate}`;
+    if (limit) url += `&limit=${limit}`;
+    if (aggregation) url += `&aggregation=${aggregation}`;
+    
+    console.log('Fetching IoMT data from:', url);
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: this.getHeaders()
+    });
+    
+    if (response.status === 404) {
+      // This is expected for new users with no data yet
+      console.log('No IoMT data found (404) - this is normal for new users');
+      return { data: [] };
     }
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to fetch IoMT data: ${response.status} - ${errorText}`);
+    }
+    
+    const data = await response.json();
+    console.log('IoMT data fetched successfully:', data);
+    
+    return data;
+  } catch (error) {
+    console.error('Error fetching IoMT data:', error);
+    throw error;
+  }
+}
+
+  // Get aggregated data from all devices
+  async getAllDeviceData(userId, options = {}) {
+    // Use the same endpoint with different parameters
+    return this.getIomtData(userId, {
+      ...options,
+      aggregation: 'by-device'
+    });
   }
 
   // Example: Save Apple Watch data

@@ -45,5 +45,9 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+	<key>NSHealthShareUsageDescription</key>
+	<string>MediCureOn needs access to your health data to provide personalized health insights and track your wellness progress.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>MediCureOn needs permission to save health data from manual entries and connected devices.</string>
 </dict>
 </plist>

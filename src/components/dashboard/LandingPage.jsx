@@ -1,4 +1,4 @@
-// src/components/dashboard/WorldClassLandingPage.jsx
+// src/components/dashboard/LandingPage.jsx
 import React, { useState, useEffect } from 'react';
 import { 
   Activity, Droplets, Scale, Heart, Brain, Moon, Trophy, Target, 
@@ -16,9 +16,11 @@ import { useAuth } from '../../hooks/useAuth';
 import { useMediCureOnData } from '../../hooks/useMediCureOnData';
 import MediCureOnSidebar from '../common/MediCureOnSidebar';
 import MediCureOnHeader from '../common/MediCureOnHeader';
-import iomtApiService from '../../services/iomtApiService';
+import deviceManager from '../../services/deviceManager';
+import dataAggregationService from '../../services/dataAggregationService';
 import manualTrackingService from '../../services/manualTrackingService';
 import challengeService from '../../services/challengeService';
+import { Capacitor } from '@capacitor/core';
 
 const LandingPage = ({ onNavigate }) => {
   const { user, userInfo, logout, isLoading } = useAuth();
@@ -34,6 +36,7 @@ const LandingPage = ({ onNavigate }) => {
 
   const [currentTime, setCurrentTime] = useState(new Date());
   const [activeTab, setActiveTab] = useState('overview'); // overview, nutrition, vitals
+  const [isHealthDataLoading, setIsHealthDataLoading] = useState(true);
   
   // Comprehensive health state
   const [healthData, setHealthData] = useState({
@@ -62,8 +65,136 @@ const LandingPage = ({ onNavigate }) => {
     aiInsights: [],
     nutritionLog: [],
     medications: [],
-    vitals: {}
+    vitals: {},
+    lastUpdated: null,
+    syncStatus: {
+      connected: false,
+      devices: [],
+      lastSync: null,
+      syncing: false
+    }
   });
+
+  // Fetch health data using new aggregation service
+  const fetchHealthData = async () => {
+    if (!user?.localAccountId) return;
+    
+    setIsHealthDataLoading(true);
+    try {
+      const country = profileData?.generalInfo?.country || 'United States';
+      
+      // Initialize device manager if not already done
+      if (!deviceManager.userId) {
+        deviceManager.initialize(user.localAccountId, profileData);
+      }
+      
+      // Get aggregated data from all sources
+      const aggregatedData = await dataAggregationService.getAggregatedHealthData(
+        user.localAccountId,
+        country
+      );
+
+      console.log('Aggregated health data:', aggregatedData);
+
+      // Calculate health scores
+      const newScores = calculateHealthScores(
+        aggregatedData.realTimeMetrics, 
+        aggregatedData
+      );
+      
+      setHealthData(prev => ({
+        ...prev,
+        realTimeMetrics: aggregatedData.realTimeMetrics,
+        score: newScores,
+        lastUpdated: aggregatedData.lastUpdated,
+        syncStatus: aggregatedData.syncStatus,
+        vitals: aggregatedData.vitals || prev.vitals
+      }));
+    } catch (error) {
+      console.error('Error fetching health data:', error);
+      // Set default empty state
+      setHealthData(prev => ({
+        ...prev,
+        syncStatus: {
+          connected: false,
+          devices: [],
+          lastSync: null,
+          syncing: false
+        }
+      }));
+    } finally {
+      setIsHealthDataLoading(false);
+    }
+  };
+
+  // Calculate health scores
+  const calculateHealthScores = (metrics, aggregatedData) => {
+    const activityScore = Math.min(100, Math.round((metrics.steps / 10000) * 100));
+    const sleepScore = Math.min(100, Math.round((metrics.sleep / 8) * 100));
+    const heartRateScore = (metrics.heartRate >= 60 && metrics.heartRate <= 100) ? 100 : 80;
+    const hydrationScore = Math.min(100, Math.round((metrics.water / 8) * 100));
+    const nutritionScore = Math.min(100, Math.round((metrics.calories / 2000) * 100));
+    
+    const overall = Math.round((activityScore + sleepScore + heartRateScore + hydrationScore + nutritionScore) / 5);
+    
+    return {
+      overall,
+      components: {
+        activity: activityScore,
+        nutrition: nutritionScore,
+        sleep: sleepScore,
+        vitals: heartRateScore,
+        mental: metrics.stress === 'Low' ? 90 : 70
+      },
+      trend: overall > 70 ? 5 : overall > 50 ? 0 : -5,
+      status: overall >= 80 ? 'Excellent' : overall >= 60 ? 'Good' : 'Needs Attention'
+    };
+  };
+
+  // Listen for health data updates
+  useEffect(() => {
+    const handleHealthDataUpdate = (event) => {
+      console.log('Health data updated event:', event.detail);
+      fetchHealthData();
+    };
+
+    const handleDeviceConnection = (event) => {
+      console.log('Device connected event:', event.detail);
+      fetchHealthData();
+    };
+
+    window.addEventListener('healthDataUpdated', handleHealthDataUpdate);
+    window.addEventListener('healthDeviceConnected', handleDeviceConnection);
+    
+    return () => {
+      window.removeEventListener('healthDataUpdated', handleHealthDataUpdate);
+      window.removeEventListener('healthDeviceConnected', handleDeviceConnection);
+    };
+  }, [user?.localAccountId, profileData?.generalInfo?.country]);
+
+  // Initial data fetch
+  useEffect(() => {
+    if (user?.localAccountId && !isLoading && !dataLoading) {
+      fetchHealthData();
+    }
+  }, [user?.localAccountId, isLoading, dataLoading]);
+
+  // Auto-refresh every minute
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (user?.localAccountId && !isHealthDataLoading) {
+        fetchHealthData();
+      }
+    }, 60000); // 1 minute
+
+    return () => clearInterval(interval);
+  }, [user?.localAccountId, isHealthDataLoading]);
+
+  // Manual refresh function
+  const handleRefresh = async () => {
+    await refreshAll(); // Refresh profile data
+    await fetchHealthData(); // Refresh health data
+  };
 
   // Get time-based greeting
   const getTimeBasedContent = () => {
@@ -126,13 +257,63 @@ const LandingPage = ({ onNavigate }) => {
           subtitle={<div className="flex items-center space-x-2"><span>{message}</span>{timeIcon}</div>}
           customBadges={customBadges}
           showRefresh={true}
-          onRefresh={refreshAll}
+          onRefresh={handleRefresh}
         />
 
         <div className="p-6">
+          {/* Enhanced Connection Status Alert */}
+          {!healthData.syncStatus.connected && (
+            <div className="p-4 mb-4 border border-yellow-200 rounded-lg bg-yellow-50">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <AlertCircle className="w-5 h-5 text-yellow-600" />
+                  <div>
+                    <p className="text-sm font-medium text-yellow-800">
+                      No health devices connected
+                    </p>
+                    <p className="mt-1 text-xs text-yellow-700">
+                      {Capacitor.getPlatform() === 'ios' 
+                        ? 'Connect your Apple Watch to see real-time health data'
+                        : 'Connect your health devices to see real-time data'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => onNavigate('profile')}
+                  className="px-4 py-2 text-sm font-medium text-yellow-800 bg-yellow-100 rounded-lg hover:bg-yellow-200"
+                >
+                  Connect Devices →
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Connected Devices Display */}
+          {healthData.syncStatus.connected && healthData.syncStatus.devices.length > 0 && (
+            <div className="p-3 mb-4 border border-green-200 rounded-lg bg-green-50">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <CheckCircle className="w-5 h-5 text-green-600" />
+                  <p className="text-sm text-green-800">
+                    Connected devices: {healthData.syncStatus.devices.map(d => d.name).join(', ')}
+                  </p>
+                </div>
+                <span className="text-xs text-green-700">
+                  Last sync: {healthData.syncStatus.lastSync ? 
+                    new Date(healthData.syncStatus.lastSync).toLocaleTimeString() : 
+                    'Never'}
+                </span>
+              </div>
+            </div>
+          )}
+
           {/* Hero Health Score Section */}
           <div className="mb-8">
-            <HealthScoreHero healthData={healthData} profileData={profileData} />
+            <HealthScoreHero 
+              healthData={healthData} 
+              profileData={profileData} 
+              isLoading={isHealthDataLoading} 
+            />
           </div>
 
           {/* Tab Navigation */}
@@ -171,6 +352,9 @@ const LandingPage = ({ onNavigate }) => {
     </div>
   );
 };
+
+// Keep all the other components (HealthScoreHero, OverviewTab, etc.) exactly the same
+// ... [Rest of the component code remains unchanged]
 
 // Hero Health Score Component
 const HealthScoreHero = ({ healthData, profileData }) => {
