@@ -6,18 +6,27 @@
 import { LogLevel } from '@azure/msal-browser';
 import { Capacitor } from '@capacitor/core';
 
+// Function to determine redirect URI based on platform
+const getRedirectUri = () => {
+  const platform = Capacitor.getPlatform();
+  
+  if (platform === 'ios' || platform === 'android') {
+    return "msauth.com.medicureon.app://auth";
+  } else if (platform === 'web' && window.location.hostname === 'localhost') {
+    return "http://localhost:3000/";
+  } else {
+    return window.location.origin + "/";
+  }
+};
+
 export const msalConfig = {
   auth: {
     clientId: "6e193dab-52c6-4dd6-95dd-abfb09d15d06",
     authority: "https://medicureoniam.ciamlogin.com/36c237cc-ca3b-425e-aed5-437c41c4b892/",
     knownAuthorities: ["medicureoniam.ciamlogin.com", "login.medicureon.com", "login.microsoftonline.com"],
-    redirectUri: Capacitor.isNativePlatform() 
-      ? "msauth.com.medicureon.app://auth"  // For native iOS/Android app
-      : (process.env.REACT_APP_AUTH_REDIRECT_URI || window.location.origin || "http://localhost:3000/"),
-    postLogoutRedirectUri: Capacitor.isNativePlatform()
-      ? "msauth.com.medicureon.app://auth"  // For native iOS/Android app
-      : (process.env.REACT_APP_AUTH_REDIRECT_URI || window.location.origin || "http://localhost:3000/"),
-    navigateToLoginRequestUrl: !Capacitor.isNativePlatform(), // Only navigate on web
+    redirectUri: getRedirectUri(),
+    postLogoutRedirectUri: getRedirectUri(),
+    navigateToLoginRequestUrl: !Capacitor.isNativePlatform(),
     validateAuthority: false,
   },
   cache: {
@@ -97,3 +106,8 @@ export const getAccessToken = async (msalInstance, account) => {
     throw error;
   }
 };
+
+// Debug logging for platform detection
+console.log('MSAL Config - Platform:', Capacitor.getPlatform());
+console.log('MSAL Config - Is Native:', Capacitor.isNativePlatform());
+console.log('MSAL Config - Redirect URI:', getRedirectUri());
