@@ -6,6 +6,7 @@ import {
   BrowserAuthError
 } from '@azure/msal-browser';
 import { msalConfig, loginRequest } from '../config/authConfig';
+import { Capacitor } from '@capacitor/core';
 
 // Create MSAL instance
 const msalInstance = new PublicClientApplication(msalConfig);
@@ -20,17 +21,64 @@ export const AuthProvider = ({ children }) => {
   const [error, setError] = useState(null);
   const [msalInitialized, setMsalInitialized] = useState(false);
 
-  const handleRedirectPromise = async () => {
+  // Check for bypass auth (dev only)
+  useEffect(() => {
+    if (Capacitor.isNativePlatform()) {
+      const bypassAuth = localStorage.getItem('bypassAuth');
+      const mockUser = localStorage.getItem('mockUser');
+      
+      if (bypassAuth === 'true' && mockUser) {
+        console.log('[Auth] Using bypass authentication');
+        try {
+          const parsedUser = JSON.parse(mockUser);
+          setUser(parsedUser);
+          setIsAuthenticated(true);
+          setIsLoading(false);
+          setMsalInitialized(true);
+          
+          // Clear bypass flag after use
+          localStorage.removeItem('bypassAuth');
+        } catch (err) {
+          console.error('[Auth] Error parsing mock user:', err);
+        }
+      }
+    }
+  }, []);
+
+
+  const initializeMsal = useCallback(async () => {
+  try {
+    // Check if already initialized via bypass
+    if (msalInitialized && isAuthenticated) {
+      console.log('[Auth] Already initialized via bypass');
+      return;
+    }
+    
+    console.log('[Auth] Initializing MSAL...');
+    
+    // Initialize MSAL
+    await msalInstance.initialize();
+    console.log('[Auth] MSAL initialized successfully');
+    setMsalInitialized(true);
+    
+    // Handle redirect promise inline
     try {
-      console.log('Handling redirect promise...');
+      console.log('[Auth] Handling redirect promise...');
+      
+      // Skip redirect handling if already authenticated via bypass
+      if (isAuthenticated && user) {
+        console.log('[Auth] Already authenticated via bypass');
+        setIsLoading(false);
+        return;
+      }
       
       // Handle the redirect response
       const response = await msalInstance.handleRedirectPromise();
-      console.log('Redirect response:', response);
+      console.log('[Auth] Redirect response:', response);
       
       if (response && response.account) {
         // User just logged in via redirect
-        console.log('Login successful via redirect');
+        console.log('[Auth] Login successful via redirect');
         setUser(response.account);
         setIsAuthenticated(true);
         
@@ -40,23 +88,23 @@ export const AuthProvider = ({ children }) => {
         }
       } else {
         // No redirect response, check for existing session
-        console.log('No redirect response, checking existing accounts...');
+        console.log('[Auth] No redirect response, checking existing accounts...');
         const accounts = msalInstance.getAllAccounts();
-        console.log('Found accounts:', accounts.length);
+        console.log('[Auth] Found accounts:', accounts.length);
         
         if (accounts.length > 0) {
           // User is already logged in
           const account = accounts[0];
           setUser(account);
           setIsAuthenticated(true);
-          console.log('User already authenticated:', account.username);
+          console.log('[Auth] User already authenticated:', account.username);
         } else {
-          console.log('No authenticated user found');
+          console.log('[Auth] No authenticated user found');
           setIsAuthenticated(false);
         }
       }
     } catch (error) {
-      console.error('Error handling redirect:', error);
+      console.error('[Auth] Error handling redirect:', error);
       // Don't set error for common redirect handling issues
       if (!error.message.includes('interaction_in_progress')) {
         setError(`Authentication error: ${error.message}`);
@@ -64,25 +112,13 @@ export const AuthProvider = ({ children }) => {
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const initializeMsal = useCallback(async () => {
-    try {
-      console.log('Initializing MSAL...');
-      
-      // Initialize MSAL
-      await msalInstance.initialize();
-      console.log('MSAL initialized successfully');
-      setMsalInitialized(true);
-      
-      // Handle redirect after initialization
-      await handleRedirectPromise();
-    } catch (error) {
-      console.error('Error initializing MSAL:', error);
-      setError(`MSAL initialization failed: ${error.message}`);
-      setIsLoading(false);
-    }
-  }, []); // Empty dependency array since handleRedirectPromise is defined inside
+    
+  } catch (error) {
+    console.error('[Auth] Error initializing MSAL:', error);
+    setError(`MSAL initialization failed: ${error.message}`);
+    setIsLoading(false);
+  }
+}, [msalInitialized, isAuthenticated, user]); // Added user to dependencies
 
   useEffect(() => {
     initializeMsal();
@@ -101,23 +137,23 @@ export const AuthProvider = ({ children }) => {
       // Check if already logged in
       const accounts = msalInstance.getAllAccounts();
       if (accounts.length > 0) {
-        console.log('User already logged in');
+        console.log('[Auth] User already logged in');
         setUser(accounts[0]);
         setIsAuthenticated(true);
         setIsLoading(false);
         return accounts[0];
       }
       
-      console.log('Initiating login popup...');
+      console.log('[Auth] Initiating login popup...');
       const response = await msalInstance.loginPopup(loginRequest);
       
-      console.log('Login successful:', response);
+      console.log('[Auth] Login successful:', response);
       setUser(response.account);
       setIsAuthenticated(true);
       
       return response;
     } catch (error) {
-      console.error('Login error:', error);
+      console.error('[Auth] Login error:', error);
       if (error instanceof BrowserAuthError) {
         setError('Login was cancelled or failed. Please try again.');
       } else {
@@ -131,7 +167,7 @@ export const AuthProvider = ({ children }) => {
 
   const handleLoginRedirect = async () => {
     if (!msalInitialized) {
-      console.error('MSAL not initialized yet');
+      console.error('[Auth] MSAL not initialized yet');
       return;
     }
 
@@ -141,20 +177,20 @@ export const AuthProvider = ({ children }) => {
       // Check if already logged in
       const accounts = msalInstance.getAllAccounts();
       if (accounts.length > 0) {
-        console.log('User already logged in, no redirect needed');
+        console.log('[Auth] User already logged in, no redirect needed');
         setUser(accounts[0]);
         setIsAuthenticated(true);
         return;
       }
       
-      console.log('Initiating login redirect...');
+      console.log('[Auth] Initiating login redirect...');
       await msalInstance.loginRedirect(loginRequest);
       
     } catch (error) {
-      console.error('Login redirect error:', error);
+      console.error('[Auth] Login redirect error:', error);
       
       if (error.errorCode === 'interaction_in_progress') {
-        console.log('Interaction already in progress');
+        console.log('[Auth] Interaction already in progress');
         // Don't show error for this
       } else {
         setError(`Login redirect failed: ${error.message}`);
@@ -170,21 +206,30 @@ export const AuthProvider = ({ children }) => {
     try {
       setIsLoading(true);
       
+      // Clear bypass auth if present
+      localStorage.removeItem('bypassAuth');
+      localStorage.removeItem('mockUser');
+      
       const logoutRequest = {
         account: user,
         postLogoutRedirectUri: msalConfig.auth.postLogoutRedirectUri,
       };
       
-      console.log('Logging out...');
+      console.log('[Auth] Logging out...');
       await msalInstance.logoutRedirect(logoutRequest);
     } catch (error) {
-      console.error('Logout error:', error);
+      console.error('[Auth] Logout error:', error);
       setError(`Logout failed: ${error.message}`);
       setIsLoading(false);
     }
   };
 
   const getAccessToken = async (scopes = loginRequest.scopes) => {
+    // For bypass auth, return mock token
+    if (user && user.localAccountId === 'test-user-123') {
+      return 'mock-access-token';
+    }
+    
     if (!msalInitialized || !user) {
       throw new Error('User not authenticated');
     }
@@ -211,7 +256,7 @@ export const AuthProvider = ({ children }) => {
     if (!user) return null;
     
     // Log all claims to see what's available
-    console.log('ID Token Claims:', user.idTokenClaims);
+    console.log('[Auth] ID Token Claims:', user.idTokenClaims);
     
     return {
       id: user.localAccountId || user.homeAccountId,
@@ -243,6 +288,7 @@ export const AuthProvider = ({ children }) => {
     getAccessToken,
     clearError: () => setError(null),
     msalInstance,
+    msalConfig, // Export msalConfig for native auth
   };
 
   return (
