@@ -26,17 +26,72 @@ import PreventiveIntelligenceDashboard from './components/plans/dashboards/Preve
 import './App.css';
 import { Capacitor } from '@capacitor/core';
 import { App as CapacitorApp } from '@capacitor/app';
+import { Browser } from '@capacitor/browser';
 import deviceManager from './services/deviceManager';
+
+// Native authentication handler for mobile platforms
+const nativeAuth = {
+  isAuthenticating: false,
+  
+  async handleNativeLogin(msalConfig) {
+    if (this.isAuthenticating) return;
+    this.isAuthenticating = true;
+    
+    try {
+      // Construct the login URL
+      const params = new URLSearchParams({
+        client_id: msalConfig.auth.clientId,
+        redirect_uri: msalConfig.auth.redirectUri,
+        response_type: 'code',
+        scope: 'openid profile email',
+        response_mode: 'query',
+        prompt: 'select_account'
+      });
+      
+      const loginUrl = `${msalConfig.auth.authority}/oauth2/v2.0/authorize?${params.toString()}`;
+      
+      console.log('Opening native login URL...');
+      
+      // Open in-app browser
+      await Browser.open({
+        url: loginUrl,
+        windowName: '_self',
+        presentationStyle: 'popover',
+        toolbarColor: '#02276F'
+      });
+      
+    } catch (error) {
+      console.error('Native login error:', error);
+      this.isAuthenticating = false;
+    }
+  }
+};
 
 // Handle app URL for authentication redirect on mobile
 if (Capacitor.isNativePlatform()) {
-  CapacitorApp.addListener('appUrlOpen', (event) => {
+  CapacitorApp.removeAllListeners('appUrlOpen');
+  
+  CapacitorApp.addListener('appUrlOpen', async (event) => {
     console.log('App opened with URL:', event.url);
-    // The MSAL library should handle this automatically
+    
     if (event.url.includes('msauth.com.medicureon.app://auth')) {
       console.log('Authentication callback received');
-      // Force a page reload to process the auth callback
-      window.location.reload();
+      
+      // Close the browser
+      try {
+        await Browser.close();
+      } catch (error) {
+        console.log('Browser might already be closed');
+      }
+      
+      // Set flag to indicate auth callback received
+      window.authCallbackReceived = true;
+      nativeAuth.isAuthenticating = false;
+      
+      // Force reload to process the auth
+      setTimeout(() => {
+        window.location.reload();
+      }, 500);
     }
   });
 }
@@ -54,31 +109,41 @@ function App() {
 
 // Separate component to use auth context
 function AppContent() {
-  const { isAuthenticated, isLoading, msalInitialized, error, user, loginRedirect, clearError, msalInstance } = useAuth();
+  const { isAuthenticated, isLoading, msalInitialized, error, user, loginRedirect, clearError, msalInstance, msalConfig } = useAuth();
   const [currentPage, setCurrentPage] = useState('landing');
   const [userInfo, setUserInfo] = useState(null);
+  const [nativeAuthAttempted, setNativeAuthAttempted] = useState(false);
 
-  // Handle MSAL redirect for mobile platforms
+  // Handle MSAL redirect for all platforms
   useEffect(() => {
-    if (Capacitor.isNativePlatform() && msalInstance) {
-      console.log('Handling MSAL redirect promise for mobile...');
+    if (msalInstance && msalInitialized) {
+      console.log('Processing MSAL redirect...');
+      
       msalInstance.handleRedirectPromise()
         .then((response) => {
           if (response) {
             console.log('Login successful:', response);
             msalInstance.setActiveAccount(response.account);
+            
+            // Clear native auth flag
+            setNativeAuthAttempted(false);
+            window.authCallbackReceived = false;
           }
         })
         .catch((error) => {
           console.error('Login error:', error);
-          // Handle specific mobile auth errors
-          if (error.errorCode === 'AADSTS165000' || error.errorCode === 'AADSTS50011') {
-            console.error('Token validation error - clearing cache and retrying');
-            msalInstance.clearCache();
+          
+          // Handle specific errors
+          if (error.errorCode === 'AADSTS50011' || error.errorMessage?.includes('reply url')) {
+            console.log('Redirect URI mismatch - this is expected on native platforms');
+            // Don't treat this as a fatal error on native platforms
+            if (!Capacitor.isNativePlatform()) {
+              clearError();
+            }
           }
         });
     }
-  }, [msalInstance]);
+  }, [msalInstance, msalInitialized]);
 
   // Fetch user info when authenticated
   useEffect(() => {
@@ -88,8 +153,8 @@ function AppContent() {
         displayName: user.name || user.displayName,
         email: user.username || user.email,
         firstName: user.name?.split(' ')[0] || user.displayName?.split(' ')[0],
-        profilePictureUrl: null, // Will be loaded from profile data
-        subscriptionType: null // Will be loaded from subscription data
+        profilePictureUrl: null,
+        subscriptionType: null
       });
 
       // Initialize device manager when user is authenticated
@@ -103,47 +168,18 @@ function AppContent() {
             const connectionStatus = deviceManager.getDeviceConnectionStatus('apple');
             
             if (!connectionStatus.connected) {
-              console.log('Apple Health not connected, attempting auto-connect...');
-              // Try silent connection first
-              try {
-                const result = await deviceManager.connectDevice('apple');
-                if (result.success) {
-                  console.log('Apple Health connected successfully!');
-                  // Dispatch event to update UI
-                  window.dispatchEvent(new CustomEvent('healthDeviceConnected', { 
-                    detail: { device: 'apple', status: 'connected' } 
-                  }));
-                } else if (result.requiresApp) {
-                  console.log('Apple Health requires native app');
-                } else {
-                  console.log('Apple Health connection failed:', result.message);
-                  // Only show prompt if it's a permissions issue
-                  if (result.message && result.message.includes('permission')) {
-                    const shouldConnect = window.confirm(
-                      'Would you like to connect Apple Health to track your health data?'
-                    );
-                    
-                    if (shouldConnect) {
-                      const retryResult = await deviceManager.connectDevice('apple');
-                      if (retryResult.success) {
-                        alert('Apple Health connected successfully!');
-                      }
-                    }
-                  }
-                }
-              } catch (error) {
-                console.error('Error during auto-connect:', error);
-              }
+              console.log('Apple Health not connected, waiting for user action...');
+              // Don't auto-connect, let user do it from profile
             } else {
               console.log('Apple Health already connected');
             }
-          }, 3000); // Give app time to fully initialize
+          }, 3000);
         }
       }
     }
   }, [isAuthenticated, user]);
 
-  // Check for page routes in URL (for direct links to legal pages and subscription success)
+  // Check for page routes in URL
   useEffect(() => {
     const path = window.location.pathname;
     const search = window.location.search;
@@ -155,33 +191,43 @@ function AppContent() {
     } else if (path === '/auth-error') {
       setCurrentPage('auth-error');
     } else if (path === '/subscription-success' || search.includes('session_id=')) {
-      // Handle subscription success redirect from Stripe
       setCurrentPage('subscription-success');
     } else if (path.startsWith('/plan-dashboard/')) {
-      // Handle plan dashboard routes
-      setCurrentPage(path.substring(1)); // Remove leading /
+      setCurrentPage(path.substring(1));
     }
   }, []);
 
-  // Automatically redirect to External ID login if not authenticated
+  // Handle authentication flow
   useEffect(() => {
-    // Allow access to legal pages, auth error, and subscription success without authentication check
     const publicPages = ['terms', 'privacy', 'auth-error'];
     const authRequiredPages = ['landing', 'profile', 'plans', 'subscription', 'subscription-success', 'rewards', 'community'];
-    
-    // Check if current page requires auth (including plan dashboards)
     const requiresAuth = authRequiredPages.includes(currentPage) || currentPage.startsWith('plan-dashboard/');
     
-    if (msalInitialized && !isLoading && !isAuthenticated && !error && requiresAuth) {
-      console.log('User not authenticated, redirecting to Microsoft login...');
-      // Add small delay for mobile to ensure proper initialization
+    if (msalInitialized && !isLoading && !isAuthenticated && !error && requiresAuth && !nativeAuthAttempted) {
+      console.log('User not authenticated, need to login...');
+      console.log('Platform:', Capacitor.getPlatform());
+      console.log('Is Native:', Capacitor.isNativePlatform());
+      
       if (Capacitor.isNativePlatform()) {
-        setTimeout(() => loginRedirect(), 500);
+        // For native platforms, use custom login flow
+        console.log('Using native authentication flow...');
+        setNativeAuthAttempted(true);
+        
+        // Small delay to ensure everything is initialized
+        setTimeout(async () => {
+          if (msalConfig) {
+            await nativeAuth.handleNativeLogin(msalConfig);
+          } else {
+            console.error('MSAL config not available');
+          }
+        }, 1000);
       } else {
+        // For web, use standard MSAL redirect
+        console.log('Using standard web authentication flow...');
         loginRedirect();
       }
     }
-  }, [msalInitialized, isLoading, isAuthenticated, error, loginRedirect, currentPage]);
+  }, [msalInitialized, isLoading, isAuthenticated, error, loginRedirect, currentPage, nativeAuthAttempted, msalConfig]);
 
   // Log authentication state
   useEffect(() => {
@@ -191,24 +237,23 @@ function AppContent() {
       msalInitialized,
       hasUser: !!user,
       currentPage,
-      sessionId: new URLSearchParams(window.location.search).get('session_id'),
       platform: Capacitor.getPlatform(),
-      isNative: Capacitor.isNativePlatform()
+      isNative: Capacitor.isNativePlatform(),
+      nativeAuthAttempted
     });
-  }, [isAuthenticated, isLoading, msalInitialized, user, currentPage]);
+  }, [isAuthenticated, isLoading, msalInitialized, user, currentPage, nativeAuthAttempted]);
 
   // Handle navigation
   const handleNavigate = (page) => {
     setCurrentPage(page);
+    
     // Update URL for better UX (not on mobile to avoid navigation issues)
     if (!Capacitor.isNativePlatform()) {
       if (page === 'terms' || page === 'privacy' || page === 'auth-error') {
         window.history.pushState({}, '', `/${page}`);
       } else if (page === 'subscription-success') {
-        // Preserve session_id in URL for subscription success
         window.history.pushState({}, '', `/subscription-success${window.location.search}`);
       } else if (page.startsWith('plan-dashboard/')) {
-        // Handle plan dashboard routes
         window.history.pushState({}, '', `/${page}`);
       } else {
         window.history.pushState({}, '', '/');
@@ -221,9 +266,9 @@ function AppContent() {
     if (isAuthenticated) {
       handleNavigate('landing');
     } else {
-      // If not authenticated, go to home or trigger login
+      // If not authenticated, trigger login
       if (Capacitor.isNativePlatform()) {
-        loginRedirect();
+        setNativeAuthAttempted(false); // Reset to trigger login again
       } else {
         window.location.href = '/';
       }
@@ -234,6 +279,7 @@ function AppContent() {
   useEffect(() => {
     if (process.env.NODE_ENV === 'development') {
       window.deviceManager = deviceManager;
+      window.nativeAuth = nativeAuth;
     }
   }, []);
 
@@ -265,8 +311,8 @@ function AppContent() {
     );
   }
 
-  // Show error state
-  if (error) {
+  // Show error state (but not for expected native platform errors)
+  if (error && !error.includes('reply url') && !error.includes('AADSTS50011')) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-50">
         <div className="max-w-md p-6 text-center bg-white rounded-lg shadow-lg">
@@ -280,9 +326,12 @@ function AppContent() {
           <button 
             onClick={() => {
               clearError();
+              setNativeAuthAttempted(false);
               if (Capacitor.isNativePlatform()) {
-                // On mobile, try to login again
-                loginRedirect();
+                // Try native auth again
+                setTimeout(() => {
+                  nativeAuth.handleNativeLogin(msalConfig);
+                }, 500);
               } else {
                 window.location.reload();
               }
@@ -388,13 +437,19 @@ function AppContent() {
     );
   }
 
-  // If we reach here, still processing
+  // If we reach here, waiting for authentication
   return (
     <div className="flex items-center justify-center min-h-screen bg-gray-50">
       <div className="text-center">
         <div className="w-12 h-12 mx-auto mb-4 border-b-2 border-blue-600 rounded-full animate-spin"></div>
-        <h2 className="mb-2 text-xl font-semibold text-gray-900">Redirecting to login...</h2>
-        <p className="text-gray-600">You will be redirected to Microsoft login shortly</p>
+        <h2 className="mb-2 text-xl font-semibold text-gray-900">
+          {Capacitor.isNativePlatform() ? 'Launching authentication...' : 'Redirecting to login...'}
+        </h2>
+        <p className="text-gray-600">
+          {Capacitor.isNativePlatform() 
+            ? 'Please complete authentication in the browser' 
+            : 'You will be redirected to Microsoft login shortly'}
+        </p>
       </div>
     </div>
   );

@@ -28,6 +28,7 @@ import { apiConfig } from '../../config/apiConfig';
 import appleHealthKitService from '../../services/appleHealthKitService';
 import { Capacitor } from '@capacitor/core';
 
+
 const ProfileManager = ({ onNavigate }) => {
   const { user, userInfo } = useAuth();
   const [activeTab, setActiveTab] = useState('general');
@@ -36,6 +37,7 @@ const ProfileManager = ({ onNavigate }) => {
   const [profilePicture, setProfilePicture] = useState(null);
   const [profilePictureFile, setProfilePictureFile] = useState(null);
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
+  
 
   // Enhanced form data state with new fields
   const [formData, setFormData] = useState({
@@ -3189,44 +3191,56 @@ const MedicationsLifestyleTab = ({ formData, handleInputChange, addArrayItem, re
 
 // Enhanced IoMT Devices Tab Component with Comprehensive Device List + Voice Assistants
 const DevicesTab = ({ formData, handleInputChange, addArrayItem, removeArrayItem }) => {
-  
+  const { user } = useAuth();
   // Handle device connection - USE ONLY THIS ONE
   const handleDeviceConnection = async (deviceKey, isConnected) => {
   if (deviceKey === 'apple' && !isConnected) {
     try {
-      // Import Capacitor at the top of the file
-      const { Capacitor } = await import('@capacitor/core');
-      
-      // Debug logging
+      console.log('Attempting Apple Health connection...');
       console.log('Platform:', Capacitor.getPlatform());
       console.log('Is Native:', Capacitor.isNativePlatform());
-      alert(`Platform: ${Capacitor.getPlatform()}, Is Native: ${Capacitor.isNativePlatform()}`);
       
-      // Check if running on mobile (Capacitor)
       if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios') {
-        // Mobile app - direct connection
-        // Use formData.userId instead of user?.uid
-        const userId = formData.userId || formData.email || 'user123';
-        const result = await appleHealthKitService.initialize(userId);
+        // Get user ID with multiple fallbacks
+        const userId = formData.userId || 
+                      user?.localAccountId || 
+                      user?.username ||
+                      formData.email || 
+                      'user123';
+        
+        console.log('Connecting with userId:', userId);
+        
+        const result = await appleHealthKitService.initialize(userId, formData);
+        
         if (result.success) {
           handleInputChange('healthDataSources', 'apple', true);
           alert('Apple Health connected successfully!');
+          
+          // Trigger immediate sync
+          setTimeout(() => {
+            appleHealthKitService.syncRecentData();
+          }, 1000);
         } else {
-          alert(result.message);
+          alert(`Failed to connect: ${result.message}`);
         }
       } else {
-        // Web browser - show download instructions
+        // Not on iOS - show modal
         showAppleHealthModal();
       }
     } catch (error) {
       console.error('Failed to connect Apple Health:', error);
-      alert('Failed to connect Apple Health. Please try again.');
+      alert(`Error: ${error.message}`);
     }
   } else if (deviceKey === 'apple' && isConnected) {
     // Disconnect
-    handleInputChange('healthDataSources', deviceKey, false);
+    try {
+      await appleHealthKitService.disconnect();
+      handleInputChange('healthDataSources', deviceKey, false);
+    } catch (error) {
+      console.error('Error disconnecting:', error);
+    }
   } else {
-    // Handle other devices normally
+    // Handle other devices
     handleInputChange('healthDataSources', deviceKey, !isConnected);
   }
 };

@@ -7,6 +7,10 @@
     "iosScheme": "https",
     "hostname": "medicureon.app"
   },
+  "ios": {
+    "contentInset": "automatic",
+    "limitsNavigationsToAppBoundDomains": true
+  },
   "plugins": {
     "SplashScreen": {
       "launchShowDuration": 2000,
@@ -16,6 +20,9 @@
       "iosSpinnerStyle": "small",
       "splashFullScreen": true,
       "splashImmersive": true
+    },
+    "@perfood/capacitor-healthkit": {
+      "usageDescription": "MediCureOn needs access to your health data to provide personalized health insights and track your wellness progress."
     }
   }
 }
