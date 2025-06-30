@@ -175,6 +175,7 @@ function AppContent() {
   const [userInfo, setUserInfo] = useState(null);
   const [nativeAuthAttempted, setNativeAuthAttempted] = useState(false);
   const [authError, setAuthError] = useState(null);
+  const [authBypassed, setAuthBypassed] = useState(false);
 
   // Handle auth errors
   useEffect(() => {
@@ -561,6 +562,7 @@ function AppContent() {
         {Capacitor.isNativePlatform() && (
           <button 
             onClick={() => {
+              setNativeAuthAttempted(true);
               nativeAuth.bypassLogin();
             }}
             className="px-4 py-2 text-white transition bg-gray-600 rounded hover:bg-gray-700"
