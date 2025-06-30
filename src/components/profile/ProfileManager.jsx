@@ -3201,28 +3201,42 @@ const DevicesTab = ({ formData, handleInputChange, addArrayItem, removeArrayItem
       console.log('Is Native:', Capacitor.isNativePlatform());
       
       if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios') {
-        // Get user ID with multiple fallbacks
-        const userId = formData.userId || 
-                      user?.localAccountId || 
-                      user?.username ||
-                      formData.email || 
-                      'user123';
-        
-        console.log('Connecting with userId:', userId);
-        
-        const result = await appleHealthKitService.initialize(userId, formData);
-        
-        if (result.success) {
-          handleInputChange('healthDataSources', 'apple', true);
-          alert('Apple Health connected successfully!');
+        // Check if the plugin is available first
+        try {
+          const { CapacitorHealthkit } = await import('@perfood/capacitor-healthkit');
           
-          // Trigger immediate sync
-          setTimeout(() => {
-            appleHealthKitService.syncRecentData();
-          }, 1000);
-        } else {
-          alert(`Failed to connect: ${result.message}`);
+          if (!CapacitorHealthkit) {
+            throw new Error('HealthKit plugin not loaded');
+          }
+          
+          const userId = formData.userId || 
+                        user?.localAccountId || 
+                        user?.username ||
+                        formData.email || 
+                        'user123';
+          
+          console.log('Connecting with userId:', userId);
+          
+          const result = await appleHealthKitService.initialize(userId, formData);
+          
+          if (result.success) {
+            handleInputChange('healthDataSources', 'apple', true);
+            alert('Apple Health connected successfully!');
+            
+            setTimeout(() => {
+              appleHealthKitService.syncRecentData();
+            }, 1000);
+          } else {
+            alert(`Failed to connect: ${result.message}`);
+          }
+          
+        } catch (pluginError) {
+          console.error('HealthKit plugin not available:', pluginError);
+          
+          // Show better error message
+          alert(`HealthKit plugin not available in this build. Please:\n\n1. Ensure @perfood/capacitor-healthkit is installed\n2. Rebuild the app with HealthKit support\n3. Or use the web version for testing`);
         }
+        
       } else {
         // Not on iOS - show modal
         showAppleHealthModal();
@@ -3232,7 +3246,7 @@ const DevicesTab = ({ formData, handleInputChange, addArrayItem, removeArrayItem
       alert(`Error: ${error.message}`);
     }
   } else if (deviceKey === 'apple' && isConnected) {
-    // Disconnect
+    // Disconnect logic here
     try {
       await appleHealthKitService.disconnect();
       handleInputChange('healthDataSources', deviceKey, false);
