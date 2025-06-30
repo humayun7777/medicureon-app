@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { MediCureOnDataProvider } from './hooks/useMediCureOnData';
 import LandingPage from './components/dashboard/LandingPage';
-import LoadingSpinner from './components/shared/LoadingSpinner';
+// import LoadingSpinner from './components/shared/LoadingSpinner'; // Not used in current implementation
 import AuthErrorPage from './components/auth/AuthErrorPage';
 import TermsOfUsePage from './components/legal/TermsOfUsePage';
 import PrivacyPolicyPage from './components/legal/PrivacyPolicyPage';
@@ -25,137 +25,10 @@ import PostSurgeryRecoveryDashboard from './components/plans/dashboards/PostSurg
 import PreventiveIntelligenceDashboard from './components/plans/dashboards/PreventiveIntelligenceDashboard';
 import './App.css';
 import { Capacitor } from '@capacitor/core';
-import { App as CapacitorApp } from '@capacitor/app';
-import { Browser } from '@capacitor/browser';
 import deviceManager from './services/deviceManager';
 
-// Native authentication handler for mobile platforms
-const nativeAuth = {
-  isAuthenticating: false,
-  
-  async handleNativeLogin(msalConfig) {
-    if (this.isAuthenticating) return;
-    this.isAuthenticating = true;
-    
-    try {
-      console.log('[NativeAuth] Starting login process...');
-      console.log('[NativeAuth] Platform:', Capacitor.getPlatform());
-      console.log('[NativeAuth] Is Native:', Capacitor.isNativePlatform());
-      
-      // Check if Browser plugin is available
-      if (!Browser) {
-        throw new Error('Browser plugin not available');
-      }
-      
-      // Log MSAL config for debugging
-      console.log('[NativeAuth] MSAL Config:', {
-        clientId: msalConfig.auth.clientId,
-        authority: msalConfig.auth.authority,
-        redirectUri: msalConfig.auth.redirectUri
-      });
-      
-      // Construct the login URL
-      const params = new URLSearchParams({
-        client_id: msalConfig.auth.clientId,
-        redirect_uri: msalConfig.auth.redirectUri,
-        response_type: 'code',
-        scope: 'openid profile email',
-        response_mode: 'query',
-        prompt: 'select_account'
-      });
-      
-      const loginUrl = `${msalConfig.auth.authority}/oauth2/v2.0/authorize?${params.toString()}`;
-      
-      console.log('[NativeAuth] Opening auth URL:', loginUrl);
-      
-      // Add timeout detection
-      const browserTimeout = setTimeout(() => {
-        console.error('[NativeAuth] Browser timeout - did not open');
-        this.isAuthenticating = false;
-        window.dispatchEvent(new CustomEvent('authError', { 
-          detail: { error: 'Browser failed to open. Please try again.' } 
-        }));
-      }, 10000);
-      
-      // Open in-app browser
-      await Browser.open({
-        url: loginUrl,
-        windowName: '_blank',
-        presentationStyle: 'popover',
-        toolbarColor: '#02276F'
-      });
-      
-      clearTimeout(browserTimeout);
-      console.log('[NativeAuth] Browser opened successfully');
-      
-    } catch (error) {
-      console.error('[NativeAuth] Login error:', error);
-      this.isAuthenticating = false;
-      window.dispatchEvent(new CustomEvent('authError', { 
-        detail: { error: error.message } 
-      }));
-    }
-  },
-  
-  // Add bypass method for testing
-  async bypassLogin() {
-    console.log('[NativeAuth] Bypassing login for testing...');
-    
-    // Create mock user data
-    const mockUser = {
-      localAccountId: 'test-user-123',
-      homeAccountId: 'test-user-123',
-      name: 'Test User',
-      username: 'test@medicureon.com',
-      email: 'test@medicureon.com',
-      displayName: 'Test User',
-      idTokenClaims: {
-        name: 'Test User',
-        email: 'test@medicureon.com',
-        given_name: 'Test',
-        family_name: 'User',
-        oid: 'test-oid-123',
-        sub: 'test-sub-123'
-      }
-    };
-    
-    // Store mock auth data
-    localStorage.setItem('bypassAuth', 'true');
-    localStorage.setItem('mockUser', JSON.stringify(mockUser));
-    
-    // Reload to process auth
-    window.location.reload();
-  }
-};
-
-// Handle app URL for authentication redirect on mobile
-if (Capacitor.isNativePlatform()) {
-  CapacitorApp.removeAllListeners('appUrlOpen');
-  
-  CapacitorApp.addListener('appUrlOpen', async (event) => {
-    console.log('[App] App opened with URL:', event.url);
-    
-    if (event.url.includes('msauth.com.medicureon.app://auth')) {
-      console.log('[App] Authentication callback received');
-      
-      // Close the browser
-      try {
-        await Browser.close();
-      } catch (error) {
-        console.log('[App] Browser might already be closed');
-      }
-      
-      // Set flag to indicate auth callback received
-      window.authCallbackReceived = true;
-      nativeAuth.isAuthenticating = false;
-      
-      // Force reload to process the auth
-      setTimeout(() => {
-        window.location.reload();
-      }, 500);
-    }
-  });
-}
+// Import the native auth service
+import nativeAuthService from './services/nativeAuthService';
 
 // Main App Component wrapped with AuthProvider and MediCureOnDataProvider
 function App() {
@@ -170,92 +43,138 @@ function App() {
 
 // Separate component to use auth context
 function AppContent() {
-  const { isAuthenticated, isLoading, msalInitialized, error, user, loginRedirect, clearError, msalInstance, msalConfig } = useAuth();
+  const { isAuthenticated, isLoading, msalInitialized, error, user, loginRedirect, clearError, msalInstance } = useAuth();
   const [currentPage, setCurrentPage] = useState('landing');
   const [userInfo, setUserInfo] = useState(null);
-  const [nativeAuthAttempted, setNativeAuthAttempted] = useState(false);
-  const [authError, setAuthError] = useState(null);
-  const [authBypassed, setAuthBypassed] = useState(false);
+  const [nativeAuthState, setNativeAuthState] = useState({
+    attempted: false,
+    loading: false,
+    error: null
+  });
 
-  // Handle auth errors
+  // Initialize native auth service when app starts
   useEffect(() => {
-    const handleAuthError = (event) => {
-      console.error('[App] Auth error received:', event.detail);
-      setAuthError(event.detail.error);
-      setNativeAuthAttempted(false);
-    };
-    
-    window.addEventListener('authError', handleAuthError);
-    
-    return () => {
-      window.removeEventListener('authError', handleAuthError);
-    };
+    console.log('[App] Initializing native auth service...');
+    nativeAuthService.initialize();
   }, []);
 
-  // Handle MSAL redirect for all platforms
+  // Handle authentication based on platform
   useEffect(() => {
-    if (msalInstance && msalInitialized) {
-      console.log('[App] Processing MSAL redirect...');
+    const publicPages = ['terms', 'privacy', 'auth-error'];
+    const authRequiredPages = ['landing', 'profile', 'plans', 'subscription', 'subscription-success', 'rewards', 'community'];
+    const requiresAuth = authRequiredPages.includes(currentPage) || currentPage.startsWith('plan-dashboard/');
+    
+    // Skip auth logic if on public pages
+    if (publicPages.includes(currentPage)) {
+      return;
+    }
+
+    console.log('[App] Auth check - Platform:', Capacitor.getPlatform(), 'Native:', Capacitor.isNativePlatform());
+    
+    if (Capacitor.isNativePlatform()) {
+      // **NATIVE PLATFORM - Use nativeAuthService**
+      console.log('[App] Using native authentication...');
+      
+      const nativeIsAuth = nativeAuthService.isAuthenticated();
+      const nativeUser = nativeAuthService.getCurrentUser();
+      
+      console.log('[App] Native auth status:', { nativeIsAuth, nativeUser });
+      
+      if (nativeIsAuth && nativeUser) {
+        // User is authenticated via native auth
+        if (!userInfo) {
+          setUserInfo({
+            displayName: nativeUser.name || nativeUser.displayName,
+            email: nativeUser.username || nativeUser.email,
+            firstName: nativeUser.name?.split(' ')[0] || nativeUser.displayName?.split(' ')[0],
+            profilePictureUrl: null,
+            subscriptionType: null
+          });
+
+          // Initialize device manager
+          const userId = nativeUser.localAccountId || nativeUser.homeAccountId || 'test-user-123';
+          deviceManager.initialize(userId, userInfo);
+          
+          // Auto-initialize HealthKit on iOS
+          if (Capacitor.getPlatform() === 'ios') {
+            setTimeout(async () => {
+              console.log('[App] Checking Apple Health connection status...');
+              const connectionStatus = deviceManager.getDeviceConnectionStatus('apple');
+              
+              if (!connectionStatus.connected) {
+                console.log('[App] Apple Health not connected, waiting for user action...');
+              } else {
+                console.log('[App] Apple Health already connected');
+              }
+            }, 3000);
+          }
+        }
+      } else if (requiresAuth && !nativeAuthState.attempted && !nativeAuthState.loading) {
+        // Need to authenticate
+        console.log('[App] Starting native authentication...');
+        
+        setNativeAuthState(prev => ({ ...prev, loading: true, attempted: true }));
+        
+        // Use bypass for now to test the flow
+        setTimeout(async () => {
+          try {
+            await nativeAuthService.bypassLogin();
+          } catch (error) {
+            console.error('[App] Native auth error:', error);
+            setNativeAuthState(prev => ({ 
+              ...prev, 
+              loading: false, 
+              error: error.message,
+              attempted: false 
+            }));
+          }
+        }, 1000);
+      }
+    } else {
+      // **WEB PLATFORM - Use existing MSAL**
+      console.log('[App] Using web authentication...');
+      
+      if (msalInitialized && !isLoading && !isAuthenticated && !error && requiresAuth) {
+        console.log('[App] Starting web authentication...');
+        loginRedirect();
+      }
+      
+      // Handle web user info
+      if (isAuthenticated && user && !userInfo) {
+        setUserInfo({
+          displayName: user.name || user.displayName,
+          email: user.username || user.email,
+          firstName: user.name?.split(' ')[0] || user.displayName?.split(' ')[0],
+          profilePictureUrl: null,
+          subscriptionType: null
+        });
+
+        // Initialize device manager for web
+        if (user.localAccountId || user.homeAccountId) {
+          const userId = user.localAccountId || user.homeAccountId;
+          deviceManager.initialize(userId, userInfo);
+        }
+      }
+    }
+  }, [currentPage, isAuthenticated, user, msalInitialized, isLoading, error, loginRedirect, nativeAuthState, userInfo]);
+
+  // Handle MSAL redirect for web platforms only
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform() && msalInstance && msalInitialized) {
+      console.log('[App] Processing MSAL redirect for web...');
       
       msalInstance.handleRedirectPromise()
         .then((response) => {
           if (response) {
-            console.log('[App] Login successful:', response);
+            console.log('[App] Web login successful:', response);
             msalInstance.setActiveAccount(response.account);
-            
-            // Clear native auth flag
-            setNativeAuthAttempted(false);
-            window.authCallbackReceived = false;
           }
         })
         .catch((error) => {
-          console.error('[App] Login error:', error);
-          
-          // Handle specific errors
-          if (error.errorCode === 'AADSTS50011' || error.errorMessage?.includes('reply url')) {
-            console.log('[App] Redirect URI mismatch - this is expected on native platforms');
-            // Don't treat this as a fatal error on native platforms
-            if (!Capacitor.isNativePlatform()) {
-              clearError();
-            }
-          }
+          console.error('[App] Web login error:', error);
         });
     }
   }, [msalInstance, msalInitialized]);
-
-  // Fetch user info when authenticated
-  useEffect(() => {
-    if (isAuthenticated && user) {
-      // Set user info from auth context
-      setUserInfo({
-        displayName: user.name || user.displayName,
-        email: user.username || user.email,
-        firstName: user.name?.split(' ')[0] || user.displayName?.split(' ')[0],
-        profilePictureUrl: null,
-        subscriptionType: null
-      });
-
-      // Initialize device manager when user is authenticated
-      if (user.localAccountId || user.homeAccountId) {
-        const userId = user.localAccountId || user.homeAccountId;
-        deviceManager.initialize(userId, userInfo);
-        
-        // Auto-initialize HealthKit on iOS
-        if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios') {
-          setTimeout(async () => {
-            console.log('[App] Checking Apple Health connection status...');
-            const connectionStatus = deviceManager.getDeviceConnectionStatus('apple');
-            
-            if (!connectionStatus.connected) {
-              console.log('[App] Apple Health not connected, waiting for user action...');
-            } else {
-              console.log('[App] Apple Health already connected');
-            }
-          }, 3000);
-        }
-      }
-    }
-  }, [isAuthenticated, user]);
 
   // Check for page routes in URL
   useEffect(() => {
@@ -274,52 +193,6 @@ function AppContent() {
       setCurrentPage(path.substring(1));
     }
   }, []);
-
-  // Handle authentication flow
-  useEffect(() => {
-    const publicPages = ['terms', 'privacy', 'auth-error'];
-    const authRequiredPages = ['landing', 'profile', 'plans', 'subscription', 'subscription-success', 'rewards', 'community'];
-    const requiresAuth = authRequiredPages.includes(currentPage) || currentPage.startsWith('plan-dashboard/');
-    
-    if (msalInitialized && !isLoading && !isAuthenticated && !error && requiresAuth && !nativeAuthAttempted) {
-      console.log('[App] User not authenticated, need to login...');
-      console.log('[App] Platform:', Capacitor.getPlatform());
-      console.log('[App] Is Native:', Capacitor.isNativePlatform());
-      
-      if (Capacitor.isNativePlatform()) {
-        // For native platforms, use custom login flow
-        console.log('[App] Using native authentication flow...');
-        setNativeAuthAttempted(true);
-        
-        // Small delay to ensure everything is initialized
-        setTimeout(async () => {
-          if (msalConfig) {
-            await nativeAuth.handleNativeLogin(msalConfig);
-          } else {
-            console.error('[App] MSAL config not available');
-          }
-        }, 1000);
-      } else {
-        // For web, use standard MSAL redirect
-        console.log('[App] Using standard web authentication flow...');
-        loginRedirect();
-      }
-    }
-  }, [msalInitialized, isLoading, isAuthenticated, error, loginRedirect, currentPage, nativeAuthAttempted, msalConfig]);
-
-  // Log authentication state
-  useEffect(() => {
-    console.log('[App] Auth State:', { 
-      isAuthenticated, 
-      isLoading, 
-      msalInitialized,
-      hasUser: !!user,
-      currentPage,
-      platform: Capacitor.getPlatform(),
-      isNative: Capacitor.isNativePlatform(),
-      nativeAuthAttempted
-    });
-  }, [isAuthenticated, isLoading, msalInitialized, user, currentPage, nativeAuthAttempted]);
 
   // Handle navigation
   const handleNavigate = (page) => {
@@ -341,23 +214,27 @@ function AppContent() {
 
   // Handle back navigation for legal pages
   const handleBackNavigation = () => {
-    if (isAuthenticated) {
+    const isAuth = Capacitor.isNativePlatform() 
+      ? nativeAuthService.isAuthenticated() 
+      : isAuthenticated;
+      
+    if (isAuth) {
       handleNavigate('landing');
     } else {
       // If not authenticated, trigger login
       if (Capacitor.isNativePlatform()) {
-        setNativeAuthAttempted(false); // Reset to trigger login again
+        setNativeAuthState(prev => ({ ...prev, attempted: false })); // Reset to trigger login again
       } else {
         window.location.href = '/';
       }
     }
   };
 
-  // Expose device manager to window for debugging
+  // Expose services to window for debugging
   useEffect(() => {
     if (process.env.NODE_ENV === 'development') {
       window.deviceManager = deviceManager;
-      window.nativeAuth = nativeAuth;
+      window.nativeAuthService = nativeAuthService;
     }
   }, []);
 
@@ -374,8 +251,12 @@ function AppContent() {
     return <AuthErrorPage onNavigate={handleNavigate} onBack={handleBackNavigation} />;
   }
 
-  // Show loading while MSAL initializes or processes auth
-  if (!msalInitialized || isLoading) {
+  // Show loading while initializing
+  const isAuthLoading = Capacitor.isNativePlatform() 
+    ? nativeAuthState.loading 
+    : (!msalInitialized || isLoading);
+
+  if (isAuthLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-50">
         <div className="text-center">
@@ -389,8 +270,10 @@ function AppContent() {
     );
   }
 
-  // Show error state (but not for expected native platform errors)
-  if (error && !error.includes('reply url') && !error.includes('AADSTS50011')) {
+  // Show error state
+  const authError = Capacitor.isNativePlatform() ? nativeAuthState.error : error;
+  
+  if (authError && !authError.includes('reply url') && !authError.includes('AADSTS50011')) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-50">
         <div className="max-w-md p-6 text-center bg-white rounded-lg shadow-lg">
@@ -399,18 +282,14 @@ function AppContent() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             <h2 className="mb-2 text-xl font-semibold">Authentication Error</h2>
-            <p className="mb-4 text-sm text-gray-600">{error}</p>
+            <p className="mb-4 text-sm text-gray-600">{authError}</p>
           </div>
           <button 
             onClick={() => {
-              clearError();
-              setNativeAuthAttempted(false);
               if (Capacitor.isNativePlatform()) {
-                // Try native auth again
-                setTimeout(() => {
-                  nativeAuth.handleNativeLogin(msalConfig);
-                }, 500);
+                setNativeAuthState({ attempted: false, loading: false, error: null });
               } else {
+                clearError();
                 window.location.reload();
               }
             }} 
@@ -423,8 +302,17 @@ function AppContent() {
     );
   }
 
+  // Check if user is authenticated (platform-specific)
+  const userAuthenticated = Capacitor.isNativePlatform() 
+    ? nativeAuthService.isAuthenticated() 
+    : isAuthenticated;
+    
+  const currentUser = Capacitor.isNativePlatform() 
+    ? nativeAuthService.getCurrentUser() 
+    : user;
+
   // Show app content only if authenticated
-  if (isAuthenticated && user) {
+  if (userAuthenticated && currentUser) {
     return (
       <div className="App">
         {currentPage === 'landing' && <LandingPage onNavigate={handleNavigate} />}
@@ -532,43 +420,35 @@ function AppContent() {
         </style>
         <div className="w-12 h-12 mx-auto mb-4 border-b-2 border-blue-600 rounded-full animate-spin"></div>
         <h2 className="mb-2 text-xl font-semibold text-gray-900">
-          {Capacitor.isNativePlatform() ? 'Launching authentication...' : 'Redirecting to login...'}
+          {Capacitor.isNativePlatform() ? 'Preparing your account...' : 'Redirecting to login...'}
         </h2>
         <p className="mb-4 text-gray-600">
           {Capacitor.isNativePlatform() 
-            ? 'Please complete authentication in the browser' 
+            ? 'Setting up your MediCureOn experience' 
             : 'You will be redirected to Microsoft login shortly'}
         </p>
-        
-        {authError && (
-          <div className="p-3 mb-4 text-red-700 bg-red-100 rounded">
-            {authError}
-          </div>
-        )}
         
         {/* Add retry button */}
         <button 
           onClick={() => {
-            setNativeAuthAttempted(false);
-            setAuthError(null);
-            window.location.reload();
+            if (Capacitor.isNativePlatform()) {
+              setNativeAuthState({ attempted: false, loading: false, error: null });
+            } else {
+              window.location.reload();
+            }
           }}
           className="px-4 py-2 mr-2 text-white transition bg-blue-600 rounded hover:bg-blue-700"
         >
           Retry
         </button>
         
-        {/* Add bypass button for testing */}
-        {Capacitor.isNativePlatform() && (
-          <button 
-            onClick={() => {
-              setNativeAuthAttempted(true);
-              nativeAuth.bypassLogin();
-            }}
-            className="px-4 py-2 text-white transition bg-gray-600 rounded hover:bg-gray-700"
-          >
-            Skip Auth (Dev Only)
-          </button>
+        {/* Debug info for development */}
+        {process.env.NODE_ENV === 'development' && (
+          <div className="p-3 mt-4 text-sm text-left bg-gray-100 rounded">
+            <div><strong>Platform:</strong> {Capacitor.getPlatform()}</div>
+            <div><strong>Native:</strong> {String(Capacitor.isNativePlatform())}</div>
+            <div><strong>Auth State:</strong> {JSON.stringify(nativeAuthState)}</div>
+          </div>
         )}
       </div>
     </div>
