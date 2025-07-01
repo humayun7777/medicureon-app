@@ -3196,65 +3196,70 @@ const DevicesTab = ({ formData, handleInputChange, addArrayItem, removeArrayItem
   const handleDeviceConnection = async (deviceKey, isConnected) => {
   if (deviceKey === 'apple' && !isConnected) {
     try {
-      console.log('Attempting Apple Health connection...');
-      console.log('Platform:', Capacitor.getPlatform());
-      console.log('Is Native:', Capacitor.isNativePlatform());
+      console.log('🍎 Attempting Apple Health connection...');
+      console.log('📱 Platform:', Capacitor.getPlatform());
+      console.log('🔧 Is Native:', Capacitor.isNativePlatform());
       
-      if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios') {
-        // Check if the plugin is available first
-        try {
-          const { CapacitorHealthkit } = await import('@perfood/capacitor-healthkit');
-          
-          if (!CapacitorHealthkit) {
-            throw new Error('HealthKit plugin not loaded');
+      // Let the service handle all the platform detection and plugin loading
+      const userId = formData.userId || 
+                    user?.localAccountId || 
+                    user?.username ||
+                    formData.email || 
+                    'user123';
+      
+      console.log('👤 Connecting with userId:', userId);
+      
+      // The service handles everything - platform detection, plugin loading, permissions
+      const result = await appleHealthKitService.initialize(userId, formData);
+      
+      console.log('🔍 Connection result:', result);
+      
+      if (result.success) {
+        // Update the UI to show connected
+        handleInputChange('healthDataSources', 'apple', true);
+        
+        // Show success message
+        alert(`✅ ${result.message}`);
+        
+        // Start syncing data
+        setTimeout(() => {
+          if (appleHealthKitService.syncRecentData) {
+            appleHealthKitService.syncRecentData();
           }
-          
-          const userId = formData.userId || 
-                        user?.localAccountId || 
-                        user?.username ||
-                        formData.email || 
-                        'user123';
-          
-          console.log('Connecting with userId:', userId);
-          
-          const result = await appleHealthKitService.initialize(userId, formData);
-          
-          if (result.success) {
-            handleInputChange('healthDataSources', 'apple', true);
-            alert('Apple Health connected successfully!');
-            
-            setTimeout(() => {
-              appleHealthKitService.syncRecentData();
-            }, 1000);
-          } else {
-            alert(`Failed to connect: ${result.message}`);
-          }
-          
-        } catch (pluginError) {
-          console.error('HealthKit plugin not available:', pluginError);
-          
-          // Show better error message
-          alert(`HealthKit plugin not available in this build. Please:\n\n1. Ensure @perfood/capacitor-healthkit is installed\n2. Rebuild the app with HealthKit support\n3. Or use the web version for testing`);
-        }
+        }, 1000);
         
       } else {
-        // Not on iOS - show modal
-        showAppleHealthModal();
+        // Show the specific error message from the service
+        console.error('❌ Connection failed:', result.message);
+        
+        if (result.requiresApp) {
+          // Show download modal for web users
+          showAppleHealthModal();
+        } else {
+          // Show the actual error
+          alert(`❌ Connection Failed\n\n${result.message}\n\nStep: ${result.step || 'unknown'}`);
+        }
       }
+      
     } catch (error) {
-      console.error('Failed to connect Apple Health:', error);
-      alert(`Error: ${error.message}`);
+      console.error('❌ Unexpected error in handleDeviceConnection:', error);
+      alert(`❌ Unexpected Error\n\n${error.message}`);
     }
+    
   } else if (deviceKey === 'apple' && isConnected) {
-    // Disconnect logic here
+    // Disconnect Apple Health
     try {
+      console.log('🔌 Disconnecting Apple Health...');
       await appleHealthKitService.disconnect();
       handleInputChange('healthDataSources', deviceKey, false);
+      alert('✅ Apple Health disconnected');
     } catch (error) {
-      console.error('Error disconnecting:', error);
+      console.error('❌ Error disconnecting:', error);
+      alert(`❌ Disconnect Error: ${error.message}`);
     }
+    
   } else {
-    // Handle other devices
+    // Handle other devices (Fitbit, Garmin, etc.)
     handleInputChange('healthDataSources', deviceKey, !isConnected);
   }
 };

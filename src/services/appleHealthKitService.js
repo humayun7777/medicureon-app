@@ -1,43 +1,16 @@
 // appleHealthKitService.js
-// Working Apple HealthKit integration using @perfood/capacitor-healthkit
+// Updated to use our custom HealthKit bridge - no more plugin conflicts!
 
 import { Capacitor } from '@capacitor/core';
+import CapacitorHealthKit from './healthKitBridge';
 import BaseDeviceService from './baseDeviceService';
+
 
 class AppleHealthKitService extends BaseDeviceService {
   constructor() {
     super('apple-health', 'Apple Health');
-    this.healthPlugin = null;
     this.mockInterval = null;
     this.isPluginInitialized = false;
-  }
-
-  // Initialize the plugin when needed
-  async initializePlugin() {
-    if (this.isPluginInitialized) {
-      return true;
-    }
-
-    const platform = Capacitor.getPlatform();
-    
-    if (platform === 'ios' && Capacitor.isNativePlatform()) {
-      try {
-        console.log('🔌 Loading @perfood/capacitor-healthkit...');
-        
-        // Import the correct plugin
-        const { CapacitorHealthkit } = await import('@perfood/capacitor-healthkit');
-        this.healthPlugin = CapacitorHealthkit;
-        this.isPluginInitialized = true;
-        console.log('✅ @perfood/capacitor-healthkit loaded successfully');
-        return true;
-        
-      } catch (error) {
-        console.error('❌ Failed to load @perfood/capacitor-healthkit:', error);
-        return false;
-      }
-    }
-    
-    return false;
   }
 
   // Override initialize to handle all platforms correctly
@@ -57,33 +30,25 @@ class AppleHealthKitService extends BaseDeviceService {
       console.log('🍎 Detected iOS native platform, initializing HealthKit...');
       
       try {
-        // Initialize the plugin
-        const pluginLoaded = await this.initializePlugin();
-        
-        if (!pluginLoaded || !this.healthPlugin) {
-          return {
-            success: false,
-            message: 'HealthKit plugin not available. Please ensure the app is properly built with HealthKit support.',
-            step: 'plugin_load'
-          };
-        }
-        
-        // Check HealthKit availability
-        const availability = await this.checkAvailability();
+        // Check HealthKit availability using our custom plugin
+        const availability = await CapacitorHealthKit.isAvailable();
         if (!availability.available) {
           return {
             success: false,
-            message: availability.message || 'HealthKit is not available on this device',
+            message: 'HealthKit is not available on this device',
             step: 'availability_check'
           };
         }
         
-        // Request permissions
-        const permissions = await this.requestPermissions();
-        if (!permissions.success) {
+        // Request permissions using our custom plugin
+        const permissions = await CapacitorHealthKit.requestAuthorization({
+          permissions: ['steps', 'heartRate', 'calories', 'distance']
+        });
+        
+        if (!permissions.granted) {
           return {
             success: false,
-            message: permissions.message || 'HealthKit permissions were denied',
+            message: 'HealthKit permissions were denied',
             step: 'permission_request'
           };
         }
@@ -150,102 +115,121 @@ class AppleHealthKitService extends BaseDeviceService {
     };
   }
 
-  // Check if HealthKit is available
-  async checkAvailability() {
-    if (!this.healthPlugin) {
-      return {
-        available: false,
-        message: 'HealthKit plugin not loaded'
-      };
+  // Perform initial sync after connection
+  async performInitialSync() {
+    if (!this.isConnected) {
+      console.log('⚠️ Cannot sync - not connected to HealthKit');
+      return;
     }
+
+    console.log('🔄 Performing initial HealthKit sync...');
 
     try {
-      console.log('🔍 Checking HealthKit availability...');
+      const now = new Date();
+      const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+      const options = {
+        startDate: yesterday.toISOString(),
+        endDate: now.toISOString()
+      };
+
+      // Fetch health data using our custom plugin
+      const [steps, heartRate, calories, distance] = await Promise.all([
+        CapacitorHealthKit.querySteps(options).catch(err => {
+          console.warn('Steps query failed:', err);
+          return { value: 0, unit: 'count' };
+        }),
+        CapacitorHealthKit.queryHeartRate(options).catch(err => {
+          console.warn('Heart rate query failed:', err);
+          return { value: 0, unit: 'bpm' };
+        }),
+        CapacitorHealthKit.queryCalories(options).catch(err => {
+          console.warn('Calories query failed:', err);
+          return { value: 0, unit: 'kcal' };
+        }),
+        CapacitorHealthKit.queryDistance(options).catch(err => {
+          console.warn('Distance query failed:', err);
+          return { value: 0, unit: 'm' };
+        })
+      ]);
+
+      const healthData = {
+        metadata: {
+          deviceId: this.deviceId,
+          deviceType: 'apple-health',
+          timestamp: now.toISOString(),
+          syncPeriod: {
+            start: yesterday.toISOString(),
+            end: now.toISOString()
+          }
+        },
+        metrics: {
+          steps: {
+            values: [{
+              value: steps.value,
+              unit: steps.unit,
+              timestamp: now.toISOString(),
+              metadata: {
+                device: 'iPhone',
+                source: 'Apple Health'
+              }
+            }],
+            latest: {
+              value: steps.value,
+              unit: steps.unit,
+              timestamp: now.toISOString()
+            },
+            aggregates: {
+              total: steps.value,
+              avg: steps.value
+            }
+          },
+          heartRate: {
+            values: [{
+              value: heartRate.value,
+              unit: heartRate.unit,
+              timestamp: now.toISOString()
+            }],
+            latest: {
+              value: heartRate.value,
+              unit: heartRate.unit,
+              timestamp: now.toISOString()
+            }
+          },
+          activeCalories: {
+            values: [{
+              value: calories.value,
+              unit: calories.unit,
+              timestamp: now.toISOString()
+            }],
+            latest: {
+              value: calories.value,
+              unit: calories.unit,
+              timestamp: now.toISOString()
+            }
+          },
+          distance: {
+            values: [{
+              value: distance.value,
+              unit: distance.unit,
+              timestamp: now.toISOString()
+            }],
+            latest: {
+              value: distance.value,
+              unit: distance.unit,
+              timestamp: now.toISOString()
+            }
+          }
+        }
+      };
+
+      // Send to backend
+      await this.sendToBackend(healthData, 'initial_sync');
       
-      // @perfood/capacitor-healthkit doesn't have explicit availability check
-      // Assume available on iOS devices
-      console.log('📱 Assuming HealthKit is available on iOS device');
-      return { available: true };
+      console.log('✅ Initial sync completed successfully');
       
     } catch (error) {
-      console.error('⚠️ HealthKit availability check failed:', error);
-      
-      // For iOS, assume available even if check fails
-      console.log('📱 Continuing despite availability check error');
-      return { available: true };
-    }
-  }
-
-  // Request HealthKit permissions using @perfood/capacitor-healthkit
-  async requestPermissions() {
-    if (!this.healthPlugin) {
-      return {
-        success: false,
-        message: 'HealthKit plugin not loaded'
-      };
-    }
-
-    // Define permissions for @perfood/capacitor-healthkit
-    const readPermissions = [
-      'steps',
-      'distance',
-      'calories',
-      'stairs',
-      'activity',
-      'duration',
-      'weight'
-    ];
-
-    try {
-      console.log('🔐 Requesting HealthKit permissions...');
-      console.log('📋 Requested permissions:', readPermissions);
-      
-      // Request authorization using @perfood/capacitor-healthkit format
-      const result = await this.healthPlugin.requestAuthorization({
-        all: [], // No read+write permissions
-        read: readPermissions, // Read-only permissions
-        write: [] // No write permissions
-      });
-      
-      console.log('🔐 HealthKit permission result:', result);
-      
-      // @perfood/capacitor-healthkit returns different result formats
-      // Accept various success indicators
-      const success = result === true || 
-                     result === 'granted' || 
-                     (result && result.granted === true) ||
-                     (result && result.success === true) ||
-                     (result && result.status === 'granted') ||
-                     (result && typeof result === 'object'); // Sometimes returns object even on success
-      
-      if (success) {
-        console.log('✅ HealthKit permissions granted!');
-        return { 
-          success: true,
-          permissions: readPermissions 
-        };
-      } else {
-        console.log('⚠️ HealthKit permissions unclear, but continuing for testing...');
-        // For testing, continue even if permission status is unclear
-        return { 
-          success: true, // Allow to continue for testing
-          permissions: readPermissions,
-          message: 'Permission status unclear but continuing...',
-          rawResult: result
-        };
-      }
-      
-    } catch (error) {
-      console.error('❌ Permission request failed:', error);
-      
-      // For testing purposes, we'll return success even on error
-      console.log('🧪 Continuing despite permission error for testing purposes');
-      return { 
-        success: true, // Allow to continue for testing
-        message: 'Permission error but continuing: ' + error.message,
-        permissions: readPermissions,
-        error: error.toString()
-      };
+      console.error('❌ Initial sync failed:', error);
     }
   }
 
@@ -261,7 +245,7 @@ class AppleHealthKitService extends BaseDeviceService {
     // Set up periodic sync (every 5 minutes)
     this.syncInterval = setInterval(() => {
       if (this.isConnected && !this.syncInProgress) {
-        this.syncRecentData();
+        this.performInitialSync(); // Reuse the same sync logic
       }
     }, this.syncFrequency || 300000); // 5 minutes
   }
