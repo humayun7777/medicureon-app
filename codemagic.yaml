@@ -24,10 +24,6 @@ workflows:
         script: |
           CI=false npm run build
           
-      - name: Sync Capacitor (keep existing iOS project)
-        script: |
-          npx cap sync ios
-
       - name: Update iOS deployment target and clean pods
         script: |
           cd ios/App
@@ -35,8 +31,8 @@ workflows:
           # Update deployment target in project file
           sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 14.0/g' App.xcodeproj/project.pbxproj
           
-          # Update Podfile platform version
-          sed -i '' "s/platform :ios, [0-9.]*/platform :ios, '14.0'/g" Podfile
+          # Direct replacement of platform line
+          sed -i '' 's/platform :ios, .*/platform :ios, '\''14.0'\''/' Podfile
 
            # Clean existing pods
             rm -rf Pods
