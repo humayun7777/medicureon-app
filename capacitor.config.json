@@ -9,7 +9,8 @@
   },
   "ios": {
     "contentInset": "automatic",
-    "limitsNavigationsToAppBoundDomains": true
+    "limitsNavigationsToAppBoundDomains": true,
+    "minVersion": "14.0"
   },
   "plugins": {
     "SplashScreen": {
