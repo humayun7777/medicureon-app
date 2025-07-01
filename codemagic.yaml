@@ -24,11 +24,10 @@ workflows:
         script: |
           CI=false npm run build
           
-      - name: Remove and recreate iOS platform
+      - name: Sync Capacitor (keep existing iOS project)
         script: |
-          rm -rf ios
-          npx cap add ios
-          
+          npx cap sync ios
+
       - name: Update iOS deployment target
         script: |
           cd ios/App
