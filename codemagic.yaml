@@ -28,7 +28,7 @@ workflows:
         script: |
           npx cap sync ios
 
-      - name: Update iOS deployment target
+      - name: Update iOS deployment target and clean pods
         script: |
           cd ios/App
           
@@ -36,11 +36,15 @@ workflows:
           sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 14.0/g' App.xcodeproj/project.pbxproj
           
           # Update Podfile platform version
-          sed -i '' "s/platform :ios, '[0-9.]*'/platform :ios, '14.0'/g" Podfile
+          sed -i '' "s/platform :ios, [0-9.]*/platform :ios, '14.0'/g" Podfile
+
+           # Clean existing pods
+            rm -rf Pods
+            rm -f Podfile.lock
           
           cd ../..
           
-      - name: Sync Capacitor
+      - name: Sync Capacitor with clean pods
         script: |
           npx cap sync ios
           
